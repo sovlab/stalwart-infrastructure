@@ -1,0 +1,100 @@
+---
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ tailscale_hostname }}"
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone }}"
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Upgrade all packages
+  ansible.builtin.apt:
+    upgrade: dist
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - gnupg
+      - ca-certificates
+      - ufw
+      - parted
+      - e2fsprogs
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+
+- name: Create admin user
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    groups: sudo
+    append: true
+    shell: /bin/bash
+    create_home: true
+
+- name: Authorize admin user's SSH key
+  ansible.posix.authorized_key:
+    user: "{{ admin_user }}"
+    key: "{{ lookup('file', admin_ssh_key) }}"
+
+- name: Allow passwordless sudo for admin user
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-{{ admin_user }}"
+    content: "{{ admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+# --- unattended security/critical updates --------------------------------
+
+- name: Configure unattended-upgrades origins
+  ansible.builtin.template:
+    src: 50unattended-upgrades.j2
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    mode: "0644"
+
+- name: Enable daily apt/unattended-upgrade timers
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+    mode: "0644"
+
+- name: Ensure unattended-upgrades service is enabled
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+
+# --- data volume ------------------------------------------------------------
+
+- name: Check whether the data device already has a filesystem
+  ansible.builtin.command: "blkid {{ data_device }}"
+  register: data_blkid
+  changed_when: false
+  failed_when: false
+
+- name: Create ext4 filesystem on data volume
+  community.general.filesystem:
+    fstype: ext4
+    dev: "{{ data_device }}"
+  when: data_blkid.rc != 0
+
+- name: Create data mount point
+  ansible.builtin.file:
+    path: "{{ data_mount }}"
+    state: directory
+    mode: "0755"
+
+- name: Mount data volume
+  ansible.posix.mount:
+    path: "{{ data_mount }}"
+    src: "{{ data_device }}"
+    fstype: ext4
+    state: mounted

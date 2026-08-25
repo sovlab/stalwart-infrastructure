@@ -1,0 +1,34 @@
+#!/bin/bash
+# Managed by Ansible - roles/mailstack.
+#
+# Copies the cert Caddy obtained for {{ mail_hostname }} into Stalwart's
+# cert directory, then asks Stalwart to reload it - the pattern documented
+# at https://stalw.art/docs/server/reverse-proxy/caddy/. Run by
+# mailstack-cert-sync.timer (daily); Caddy itself handles renewal, this
+# script just picks up whatever Caddy currently has on disk.
+set -euo pipefail
+
+CADDY_DATA="{{ data_mount }}/caddy/data"
+STALWART_CERT_DIR="{{ data_mount }}/stalwart/cert"
+MAIL_HOSTNAME="{{ mail_hostname }}"
+API_KEY="{{ stalwart_api_key }}"
+
+crt_src=$(find "$CADDY_DATA" -type f -name "${MAIL_HOSTNAME}.crt" -print -quit)
+key_src=$(find "$CADDY_DATA" -type f -name "${MAIL_HOSTNAME}.key" -print -quit)
+
+if [[ -z "$crt_src" || -z "$key_src" ]]; then
+  echo "sync-certs: no cert for ${MAIL_HOSTNAME} under ${CADDY_DATA} yet (Caddy may not have issued one)." >&2
+  exit 0
+fi
+
+install -m 0644 "$crt_src" "${STALWART_CERT_DIR}/${MAIL_HOSTNAME}.crt"
+install -m 0600 "$key_src" "${STALWART_CERT_DIR}/${MAIL_HOSTNAME}.priv.pem"
+
+if [[ -z "$API_KEY" ]]; then
+  echo "sync-certs: copied cert, but stalwart_api_key is not set - skipping reload. Create an API key in Stalwart's WebUI, put it in .env as STALWART_API_KEY, and re-run playbooks/10-site.yml." >&2
+  exit 0
+fi
+
+docker compose -f "{{ mailstack_dir }}/docker-compose.yml" exec -T stalwart \
+  stalwart-cli --url "https://${MAIL_HOSTNAME}" --api-key "$API_KEY" \
+  create action/ReloadTlsCertificates

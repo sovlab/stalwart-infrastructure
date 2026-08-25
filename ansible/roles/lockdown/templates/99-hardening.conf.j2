@@ -1,0 +1,9 @@
+# Managed by Ansible - roles/lockdown
+# Binds sshd to the Tailscale interface only; the public interface no
+# longer accepts SSH at all.
+ListenAddress {{ ts_ip4.stdout }}
+ListenAddress {{ ts_ip6.stdout }}
+
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no

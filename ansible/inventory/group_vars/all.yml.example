@@ -1,0 +1,60 @@
+---
+# Copy this to all.yml (same directory) and fill in your real values.
+# all.yml is gitignored; this example file is the one that gets committed.
+
+# --- identity -----------------------------------------------------------
+admin_user: CHANGEME_ADMIN_USER
+admin_ssh_key: "~/.ssh/id_ed25519.pub"   # public key file for {{ admin_user }}; adjust to your actual key
+
+domain: CHANGEME_DOMAIN.example
+mail_hostname: mail.CHANGEME_DOMAIN.example       # Stalwart: SMTP / IMAP / JMAP / webadmin
+webmail_hostname: webmail.CHANGEME_DOMAIN.example # Bulwark
+
+timezone: UTC
+
+# --- storage --------------------------------------------------------------
+data_device: /dev/sdb
+data_mount: /data
+mailstack_dir: "{{ data_mount }}/mailstack"
+
+# --- tailscale --------------------------------------------------------------
+# Requires TAILSCALE_AUTHKEY in the environment (loaded from .env via mise).
+# Must be a reusable, tagged pre-auth key from the Tailscale admin console.
+# The tag (tag:mailserver below) must already exist in your tailnet's ACL
+# policy under "tagOwners" before `tailscale up --advertise-tags` will work,
+# otherwise the join fails with a permission error.
+tailscale_authkey: "{{ lookup('ansible.builtin.env', 'TAILSCALE_AUTHKEY') }}"
+tailscale_hostname: mail01
+tailscale_tags:
+  - tag:mailserver
+
+# --- cloudflare (future DNS record automation - not yet used by any role) --
+# Requires CLOUDFLARE_API_TOKEN in the environment. Scope it to
+# Zone:DNS:Edit on your zone only. Not consumed yet: DNS-01/record
+# automation is on the roadmap (see README). Caddy uses HTTP-01 against the
+# ports it already owns, so nothing in this repo needs the token today.
+cloudflare_api_token: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_API_TOKEN') }}"
+
+# --- firewall ---------------------------------------------------------------
+# Ports reachable from the public internet. SSH is deliberately absent:
+# sshd only listens on the Tailscale interface (see roles/lockdown).
+# 587/143/110/995/4190 are deliberately left off, per Stalwart's own
+# hardening guide, since 465+993 already cover encrypted submission + IMAP.
+public_tcp_ports:
+  - 25   # SMTP (inbound from other MTAs)
+  - 465  # SMTP submission, implicit TLS (mail clients)
+  - 993  # IMAPS (mail clients)
+  - 80   # Caddy ACME HTTP-01 challenge + http->https redirect
+  - 443  # HTTPS (Caddy: webmail + JMAP + webadmin)
+
+# --- mail stack ---------------------------------------------------------
+postgres_db: stalwart
+postgres_user: stalwart
+postgres_password: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') }}"
+
+# Set after completing Stalwart's one-time setup wizard (see README):
+# create a scoped API key in the WebUI, put it in .env as STALWART_API_KEY.
+# Blank until then - the cert-sync timer is skipped when it's empty.
+stalwart_api_key: "{{ lookup('ansible.builtin.env', 'STALWART_API_KEY') }}"
+
+bulwark_internal_port: 3000

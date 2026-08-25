@@ -1,0 +1,8 @@
+# Managed by Ansible - roles/mailstack.
+{{ webmail_hostname }} {
+	reverse_proxy bulwark:{{ bulwark_internal_port }}
+}
+
+{{ mail_hostname }} {
+	reverse_proxy stalwart:8080
+}

@@ -1,0 +1,33 @@
+---
+# Copy this to hosts.yml and fill in your real values. hosts.yml is
+# gitignored; this example file is the one that gets committed.
+#
+# Two groups pointing at the SAME physical VPS, used in two different phases:
+#
+# `initial`   - used ONCE, by playbooks/00-bootstrap.yml, connecting as root
+#               over the public IP. This is the only play that ever touches
+#               the public IP as root.
+#
+# `mailhosts` - used for every playbook after that, connecting as the admin
+#               user over the Tailscale IP. Once 00-bootstrap.yml has run,
+#               sshd is bound to the Tailscale interface only, so root+public
+#               IP access no longer works (by design).
+#
+# After running 00-bootstrap.yml, replace CHANGEME_TAILSCALE_IP below with
+# the address `tailscale ip -4` reports for this host (also printed at the
+# end of that playbook's run).
+
+all:
+  children:
+    initial:
+      hosts:
+        mail01_bootstrap:
+          ansible_host: CHANGEME_VPS_PUBLIC_IP
+          ansible_user: root
+
+    mailhosts:
+      hosts:
+        mail01:
+          ansible_host: CHANGEME_TAILSCALE_IP
+          ansible_user: CHANGEME_ADMIN_USER
+          ansible_become: true

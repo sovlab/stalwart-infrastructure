@@ -1,0 +1,67 @@
+# Managed by Ansible - roles/mailstack. Re-run playbooks/10-site.yml to
+# apply changes; do not edit by hand on the host.
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "{{ postgres_db }}"
+      POSTGRES_USER: "{{ postgres_user }}"
+      POSTGRES_PASSWORD: "{{ postgres_password }}"
+    volumes:
+      - "{{ data_mount }}/postgres:/var/lib/postgresql/data"
+    networks: [internal]
+
+  stalwart:
+    image: stalwartlabs/stalwart:v0.16
+    restart: unless-stopped
+    depends_on: [postgres]
+    # 8080 (plain HTTP JMAP/WebUI/admin) is reached by Caddy over the
+    # internal network only - never published to the host. 25/465/993 are
+    # Stalwart's own raw SMTP/IMAP TLS listeners, published directly since
+    # Caddy can't proxy raw TCP; they get their certs from cron-synced
+    # copies of Caddy's ACME cert (see roles/mailstack/files/sync-certs.sh).
+    ports:
+      - "25:25"
+      - "465:465"
+      - "993:993"
+    volumes:
+      - "{{ data_mount }}/stalwart/data:/opt/stalwart"
+      - "{{ data_mount }}/stalwart/cert:/opt/stalwart/cert"
+    networks: [internal]
+
+  caddy:
+    # Built from caddy-config/Dockerfile, which COPYs the Caddyfile in at
+    # build time - not bind-mounted. See that Dockerfile for why.
+    build:
+      context: "{{ mailstack_dir }}/caddy-config"
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "{{ data_mount }}/caddy/data:/data"
+      - "{{ data_mount }}/caddy/config:/config"
+    networks: [internal]
+
+  bulwark:
+    image: ghcr.io/bulwarkmail/webmail:1.8
+    restart: unless-stopped
+    environment:
+      PORT: "{{ bulwark_internal_port }}"
+      JMAP_SERVER_URL: "https://{{ mail_hostname }}"
+    volumes:
+      - "{{ data_mount }}/bulwark/admin:/app/data/admin"
+      - "{{ data_mount }}/bulwark/admin-state:/app/data/admin-state"
+      - "{{ data_mount }}/bulwark/settings:/app/data/settings"
+    networks: [internal]
+
+networks:
+  # enable_ipv6 is per-network - the daemon-level "ipv6" setting in
+  # /etc/docker/daemon.json (roles/docker) only covers the default
+  # bridge, not this custom one.
+  internal:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: fd00:dead:beef:1::/64

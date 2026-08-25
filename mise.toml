@@ -1,0 +1,8 @@
+[tools]
+ansible = { version = "latest", pipx_args = "--include-deps", uvx = false }
+python = "latest"
+uv = "latest"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+_.file = ".env"

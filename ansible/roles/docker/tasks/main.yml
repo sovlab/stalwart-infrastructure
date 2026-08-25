@@ -1,0 +1,73 @@
+---
+- name: Add Docker apt repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "https://download.docker.com/linux/ubuntu"
+    suites: "{{ ansible_facts.distribution_release }}"
+    components: [stable]
+    signed_by: "https://download.docker.com/linux/ubuntu/gpg"
+    state: present
+
+- name: Install Docker engine and compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Add admin user to the docker group
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    groups: docker
+    append: true
+
+- name: Configure Docker daemon (log rotation, IPv6)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        },
+        "data-root": "{{ data_mount }}/docker",
+        "ipv6": true,
+        "fixed-cidr-v6": "fd00:dead:beef::/64",
+        "ip6tables": true
+      }
+    mode: "0644"
+  notify: Restart docker
+
+# data-root above lives on {{ data_mount }}, a separate mounted volume.
+# docker.service has no built-in reason to wait for it, so on boot there's
+# a race: if Docker starts first, it initializes a fresh empty state at
+# that path on the root filesystem, which the real volume then mounts
+# over a moment later - Docker's previous containers/images appear to
+# have vanished even though restart policies were set correctly.
+- name: Create docker.service systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: "0755"
+
+- name: Make Docker wait for the data volume to be mounted before starting
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/data-mount.conf
+    content: |
+      [Unit]
+      RequiresMountsFor={{ data_mount }}
+    mode: "0644"
+  register: docker_mount_dropin
+
+- name: Enable and start Docker
+  ansible.builtin.systemd:
+    name: docker
+    daemon_reload: "{{ docker_mount_dropin.changed }}"
+    enabled: true
+    state: started

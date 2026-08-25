@@ -1,0 +1,97 @@
+---
+- name: Fail early if POSTGRES_PASSWORD is not set
+  ansible.builtin.assert:
+    that:
+      - postgres_password is defined
+      - postgres_password | length > 0
+    fail_msg: "POSTGRES_PASSWORD is empty. Set it in .env before running this playbook."
+
+- name: Create mail stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ mailstack_dir }}"
+    - "{{ mailstack_dir }}/caddy-config"
+    - "{{ data_mount }}/postgres"
+    - "{{ data_mount }}/stalwart/data"
+    - "{{ data_mount }}/stalwart/cert"
+    - "{{ data_mount }}/caddy/data"
+    - "{{ data_mount }}/caddy/config"
+    - "{{ data_mount }}/bulwark/admin"
+    - "{{ data_mount }}/bulwark/admin-state"
+    - "{{ data_mount }}/bulwark/settings"
+
+- name: Render docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ mailstack_dir }}/docker-compose.yml"
+    mode: "0644"
+
+- name: Render Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ mailstack_dir }}/caddy-config/Caddyfile"
+    mode: "0644"
+
+- name: Copy caddy build Dockerfile
+  ansible.builtin.copy:
+    src: Dockerfile.caddy
+    dest: "{{ mailstack_dir }}/caddy-config/Dockerfile"
+    mode: "0644"
+
+- name: Deploy the mail stack
+  ansible.builtin.command: docker compose up -d --build
+  args:
+    chdir: "{{ mailstack_dir }}"
+  register: compose_up
+  changed_when: >-
+    'Started' in compose_up.stderr or 'Created' in compose_up.stderr
+    or 'Recreated' in compose_up.stderr
+
+- name: Wait for Stalwart's one-time bootstrap admin credentials to appear in its logs
+  ansible.builtin.shell: >
+    docker compose logs --no-color stalwart 2>&1
+    | grep -A3 "temporary administrator account"
+  args:
+    chdir: "{{ mailstack_dir }}"
+  register: stalwart_bootstrap_creds
+  changed_when: false
+  failed_when: false
+  until: stalwart_bootstrap_creds.rc == 0
+  retries: 10
+  delay: 3
+
+- name: Show Stalwart's bootstrap admin credentials
+  ansible.builtin.debug:
+    msg: >-
+      {{ stalwart_bootstrap_creds.stdout
+         if stalwart_bootstrap_creds.rc == 0
+         else "No bootstrap credentials found in Stalwart's logs - initial setup is probably already done. If not, check `docker compose logs stalwart` by hand." }}
+
+# --- cert sync: copies Caddy's cert into Stalwart's cert dir and asks
+# Stalwart to reload it. See templates/sync-certs.sh.j2 for why this is a
+# script + timer rather than something Ansible does directly: it has to
+# run on every renewal, not just at provisioning time.
+
+- name: Render cert-sync script
+  ansible.builtin.template:
+    src: sync-certs.sh.j2
+    dest: "{{ mailstack_dir }}/sync-certs.sh"
+    mode: "0700"   # embeds the Stalwart API key once set - keep it private
+
+- name: Install cert-sync systemd unit
+  ansible.builtin.template:
+    src: "mailstack-cert-sync.{{ item }}.j2"
+    dest: "/etc/systemd/system/mailstack-cert-sync.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: cert_sync_units
+
+- name: Enable cert-sync timer
+  ansible.builtin.systemd:
+    name: mailstack-cert-sync.timer
+    daemon_reload: "{{ cert_sync_units.changed }}"
+    enabled: true
+    state: started

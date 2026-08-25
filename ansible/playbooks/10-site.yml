@@ -1,0 +1,16 @@
+---
+# Run repeatedly, over Tailscale as {{ admin_user }}:
+#   ansible-playbook playbooks/10-site.yml
+#
+# Requires playbooks/00-bootstrap.yml to have run first, and
+# inventory/hosts.yml -> mailhosts -> mail01 -> ansible_host to be set to
+# this host's Tailscale IP.
+- name: Harden, install Docker, configure firewall, deploy mail stack
+  hosts: mailhosts
+  become: true
+  gather_facts: true
+  roles:
+    - lockdown
+    - docker
+    - firewall
+    - mailstack

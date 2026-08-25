@@ -1,0 +1,38 @@
+---
+# Runs over the Tailscale connection (mailhosts group) - see inventory/hosts.yml.
+# Only ever restricts sshd further; never widens it, so a re-run is safe even
+# if this already applied.
+
+- name: Read tailnet IPv4 address
+  ansible.builtin.command: tailscale ip -4
+  register: ts_ip4
+  changed_when: false
+
+- name: Read tailnet IPv6 address
+  ansible.builtin.command: tailscale ip -6
+  register: ts_ip6
+  changed_when: false
+
+- name: Sanity check - confirm we are actually connected over Tailscale
+  ansible.builtin.assert:
+    that:
+      - ansible_host == ts_ip4.stdout or ansible_host == ts_ip6.stdout
+    fail_msg: >-
+      ansible_host ({{ ansible_host }}) does not match this host's Tailscale
+      address ({{ ts_ip4.stdout }} / {{ ts_ip6.stdout }}). Refusing to bind
+      sshd to the tailnet only, to avoid locking out the current connection
+      path. Check inventory/hosts.yml.
+
+- name: Install sshd hardening drop-in
+  ansible.builtin.template:
+    src: 99-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/99-hardening.conf
+    mode: "0644"
+  notify: Restart sshd
+
+- name: Validate the merged sshd configuration before restarting
+  ansible.builtin.command: sshd -t
+  changed_when: false
+
+- name: Flush handlers now so sshd is confirmed reloaded before continuing
+  ansible.builtin.meta: flush_handlers

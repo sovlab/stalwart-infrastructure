@@ -1,0 +1,66 @@
+---
+- name: Fail early if TAILSCALE_AUTHKEY is not set
+  ansible.builtin.assert:
+    that:
+      - tailscale_authkey is defined
+      - tailscale_authkey | length > 0
+    fail_msg: >-
+      TAILSCALE_AUTHKEY is empty. Export it (mise loads .env automatically
+      in this directory) before running this playbook.
+
+- name: Add Tailscale apt signing key
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_facts.distribution_release }}.noarmor.gpg"
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    mode: "0644"
+
+- name: Add Tailscale apt repository
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_facts.distribution_release }}.tailscale-keyring.list"
+    dest: /etc/apt/sources.list.d/tailscale.list
+    mode: "0644"
+  register: tailscale_repo
+
+- name: Update apt cache after adding Tailscale repo
+  ansible.builtin.apt:
+    update_cache: true
+  when: tailscale_repo.changed
+
+- name: Install tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+
+- name: Enable tailscaled
+  ansible.builtin.systemd:
+    name: tailscaled
+    enabled: true
+    state: started
+
+- name: Check current tailscale status
+  ansible.builtin.command: tailscale status --json
+  register: ts_status
+  changed_when: false
+  failed_when: false
+
+- name: Join the tailnet
+  ansible.builtin.command: >
+    tailscale up
+    --authkey={{ tailscale_authkey }}
+    --hostname={{ tailscale_hostname }}
+    --advertise-tags={{ tailscale_tags | join(',') }}
+    --accept-dns=true
+  when: ts_status.rc != 0 or '"BackendState":"Running"' not in ts_status.stdout
+  no_log: true
+
+- name: Read back the tailnet IPv4 address
+  ansible.builtin.command: tailscale ip -4
+  register: tailscale_ip_result
+  changed_when: false
+
+- name: Show the Tailscale IP to record in inventory/hosts.yml
+  ansible.builtin.debug:
+    msg: >-
+      Tailscale IPv4 for this host is {{ tailscale_ip_result.stdout }}.
+      Put this in inventory/hosts.yml under mailhosts -> mail01 -> ansible_host
+      before running playbooks/10-site.yml.

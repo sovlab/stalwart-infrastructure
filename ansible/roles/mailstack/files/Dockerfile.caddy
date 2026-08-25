@@ -1,0 +1,11 @@
+# Managed by Ansible - roles/mailstack.
+#
+# The Caddyfile is baked into the image rather than bind-mounted at
+# runtime. On this host, a bind mount that needs to see host-side content
+# written *before* the container's own mount was established (as opposed
+# to content the container writes itself, like Caddy's /data and /config)
+# reliably shows up empty inside the container - confirmed reproducible
+# with a completely unrelated image/path, unrelated to anything in this
+# repo's config. Baking the file into the image sidesteps it entirely.
+FROM caddy:2-alpine
+COPY Caddyfile /etc/caddy/Caddyfile

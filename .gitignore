@@ -1,0 +1,15 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+
+# Real per-deployment values - see the .example files alongside these
+ansible/inventory/hosts.yml
+ansible/inventory/group_vars/all.yml

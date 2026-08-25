@@ -1,0 +1,59 @@
+---
+# Docker inserts its own iptables/nftables rules ahead of ufw's, so a
+# container publishing a port (e.g. -p 993:993) is reachable from the
+# internet even while `ufw status` shows it denied. ufw-docker patches
+# /etc/ufw/after.rules so Docker-forwarded traffic is routed through ufw's
+# own chain instead of bypassing it.
+# https://github.com/chaifeng/ufw-docker
+
+- name: Ensure IPv6 filtering is enabled in ufw
+  ansible.builtin.lineinfile:
+    path: /etc/default/ufw
+    regexp: "^IPV6="
+    line: "IPV6=yes"
+  notify: Reload ufw
+
+- name: Set default ufw policies
+  community.general.ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+
+- name: Allow SSH on the Tailscale interface only
+  community.general.ufw:
+    rule: allow
+    interface_in: tailscale0
+    port: "22"
+    proto: tcp
+
+# ufw must be active before ufw-docker (and the route-allow rules below)
+# can inspect/patch it - the SSH rule above is already in the ruleset by
+# the time ufw comes up, so there's no lockout window.
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled
+
+- name: Download ufw-docker
+  ansible.builtin.get_url:
+    url: https://github.com/chaifeng/ufw-docker/raw/master/ufw-docker
+    dest: /usr/local/bin/ufw-docker
+    mode: "0755"
+
+- name: Check whether ufw-docker is already installed into after.rules
+  ansible.builtin.command: grep -q ufw-user-forward /etc/ufw/after.rules
+  register: ufw_docker_check
+  changed_when: false
+  failed_when: false
+
+- name: Patch ufw to route Docker-forwarded traffic through ufw (ufw-docker install)
+  ansible.builtin.command: /usr/local/bin/ufw-docker install
+  when: ufw_docker_check.rc != 0
+  notify: Reload ufw
+
+- name: Allow public mail/HTTPS ports through to Docker-published containers
+  ansible.builtin.command: "ufw route allow proto tcp from any to any port {{ item }}"
+  loop: "{{ public_tcp_ports }}"
+  register: ufw_route_result
+  changed_when: "'Skipping' not in ufw_route_result.stdout"

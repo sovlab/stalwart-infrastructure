@@ -1,0 +1,14 @@
+---
+# Run ONCE, over the public IP as root:
+#   ansible-playbook playbooks/00-bootstrap.yml
+#
+# Afterwards, copy the Tailscale IP printed at the end of this run into
+# inventory/hosts.yml (mailhosts -> mail01 -> ansible_host), then use
+# playbooks/10-site.yml for everything else.
+- name: Bootstrap the VPS and join Tailscale
+  hosts: initial
+  become: true
+  gather_facts: true
+  roles:
+    - bootstrap
+    - tailscale

@@ -1,0 +1,197 @@
+{# Managed by Ansible - roles/mailstack. NDJSON plan for `stalwart-cli
+    apply`: one upsert per line, parents first, so later objects can
+    reference earlier ones with #<client-id>. Every operation is an upsert
+    keyed on `matchOn`, which makes the file idempotent: re-applying updates
+    the matched object in place instead of creating a second one.
+
+    Derived from `stalwart-cli snapshot` of a wizard-built server, with four
+    changes:
+
+      * Certificate and DkimSignature are dropped. Their private keys come
+        back from the API as "****", so replaying them would install a
+        certificate and DKIM keys that cannot sign anything. The Domain
+        below sets certificateManagement and dkimManagement to Automatic,
+        so a fresh server issues its own and publishes the DKIM records to
+        Cloudflare itself.
+      * Role is dropped. Those four are Stalwart's built-ins, and their
+        permission sets shift between releases; replaying a captured copy
+        pins them to whatever version was snapshotted.
+      * DataRetention / BlobStore / InMemoryStore / SearchStore are dropped,
+        all four were at their defaults.
+      * Account gets an explicit matchOn. snapshot omits it (the type has no
+        label property) and warns that apply then matches by comparing every
+        field, which creates duplicates on re-apply instead of updating.
+
+    Secrets are templated in, since the snapshot could not carry them: the
+    API returns "****" for every write-only field, so --include-secrets has
+    nothing to keep.
+
+    If you ever re-snapshot, add these to the type list. The baseline list in
+    Stalwart's own docs omits all of them, and each one cost an outage to
+    find, because apply then silently accepts the server's raw defaults:
+
+      NetworkListener  default useTls: true on the 8080 HTTP listener, so
+                       Caddy's plaintext requests are reset -> 502
+      Tracer           default is a file logger writing where nothing reads,
+                       so `docker logs` is empty and failures are invisible
+      AllowedIp        needed so a banned proxy cannot lock out the console
+      BlockedIp        worth reviewing, though not worth replaying #}
+{{ {"@type": "upsert", "object": "DnsServer", "matchOn": ["description"], "value": {
+     "dnsserver-cf": {
+       "@type": "Cloudflare",
+       "description": "cloudflare " ~ domain,
+       "secret": {"@type": "Value", "secret": cloudflare_api_token},
+       "ttl": 300000,
+       "timeout": 30000,
+       "pollingInterval": 15000,
+       "propagationTimeout": 60000}}} | to_json }}
+{{ {"@type": "upsert", "object": "AcmeProvider", "matchOn": ["description"], "value": {
+     "acme-le": {
+       "description": "letsencrypt " ~ domain,
+       "challengeType": "Dns01",
+       "contact": {"mailto:postmaster@" ~ domain: true},
+       "renewBefore": "R23",
+       "maxRetries": 10,
+       "reuseKey": false}}} | to_json }}
+{{ {"@type": "upsert", "object": "Domain", "matchOn": ["name"], "value": {
+     "domain-primary": {
+       "name": domain,
+       "isEnabled": true,
+       "allowRelaying": false,
+       "reportAddressUri": "mailto:postmaster",
+       "subAddressing": {"@type": "Enabled"},
+       "dnsManagement": {
+         "@type": "Automatic",
+         "dnsServerId": "#dnsserver-cf",
+         "publishRecords": {
+           "dkim": true, "spf": true, "dmarc": true, "srv": true,
+           "mtaSts": true, "tlsRpt": true, "autoConfig": true,
+           "autoConfigLegacy": true, "autoDiscover": true}},
+       "dkimManagement": {
+         "@type": "Automatic",
+         "algorithms": {"Dkim1Ed25519Sha256": true, "Dkim1RsaSha256": true},
+         "selectorTemplate": "v{version}-{algorithm}-{date-%Y%m%d}",
+         "rotateAfter": 7776000000,
+         "retireAfter": 604800000,
+         "deleteAfter": 2592000000},
+       "certificateManagement": {
+         "@type": "Automatic",
+         "subjectAlternativeNames": {},
+         "acmeProviderId": "#acme-le"}}}} | to_json }}
+{% for a in stalwart_accounts %}
+{{ {"@type": "upsert", "object": "Account", "matchOn": ["name"], "value": {
+     "account-" ~ a.name: {
+       "@type": "User",
+       "name": a.name,
+       "description": a.description | default(a.name),
+       "domainId": "#domain-primary",
+       "roles": {"@type": a.role | default("User")},
+       "permissions": {"@type": "Inherit"},
+       "locale": a.locale | default("en_US"),
+       "encryptionAtRest": {"@type": "Disabled"},
+       "credentials": {"0": {"@type": "Password", "secret": a.password, "allowedIps": {}}}}}} | to_json }}
+{% endfor %}
+{# Network listeners. A wizard-built server gets these automatically; one
+   provisioned through recovery mode does not, and comes up with only the
+   management listener on 8080. Everything else then refuses connections,
+   which from outside looks exactly like a blocked port.
+
+   useTls defaults to true in the schema, which is right for the mail
+   listeners (STARTTLS on 25, implicit TLS on 465/993/443) and wrong for the
+   plaintext 8080 one Caddy proxies to - a TLS-expecting socket resets a
+   plaintext request and Caddy reports 502.
+
+   These are upserts, not a reconcile: an upsert never destroys, so a
+   listener added by hand is left alone, and the apply cannot pull the 8080
+   listener out from under the connection it is running over. #}
+{% for l in stalwart_listeners %}
+{{ {"@type": "upsert", "object": "NetworkListener", "matchOn": ["name"], "value": {
+     "listener-" ~ l.name: {
+       "name": l.name,
+       "bind": {"[::]:" ~ l.port: true},
+       "protocol": l.protocol,
+       "useTls": l.use_tls | default(true),
+       "tlsImplicit": l.tls_implicit}}} | to_json }}
+{% endfor %}
+{# Console logging. Stalwart's default tracer is a Log (file) tracer, which
+    in the container writes somewhere nothing ever reads, so `docker logs`
+    stays empty and every failure is invisible. Tracer has no label property
+    to match on, so this is a reconcile scoped to the Stdout variant with a
+    by-value match: it converges the console tracers to exactly this one and
+    leaves the Log tracer alone. #}
+{{ {"@type": "reconcile", "object": "Tracer", "matchOn": "*", "scope": {"@type": "Stdout"}, "value": {
+     "tracer-stdout": {
+       "@type": "Stdout",
+       "enable": true,
+       "level": "info",
+       "ansi": false}}} | to_json }}
+{# Caddy's network on Stalwart's IP allowlist. Belt and braces alongside
+    proxyTrustedNetworks below: if the proxy ever does get attributed some
+    abuse, an allowlist entry keeps it from being banned and taking the
+    admin console and webmail offline with it. #}
+{{ {"@type": "upsert", "object": "AllowedIp", "matchOn": ["address"], "value": {
+     "allowedip-internal-v4": {
+       "address": mailstack_subnet_v4,
+       "reason": "Caddy reverse proxy (mailstack internal network)"},
+     "allowedip-internal-v6": {
+       "address": mailstack_subnet_v6,
+       "reason": "Caddy reverse proxy (mailstack internal network)"}}} | to_json }}
+{# Message bodies, attachments and Sieve scripts go to S3 instead of the
+   local RocksDB store, which is what keeps this deployment runnable on a
+   VPS with no second disk. BlobStore is a singleton, so this is an update
+   rather than an upsert.
+
+   `region` is a nested type: the Custom variant carries customEndpoint and
+   customRegion, which is how any S3-compatible provider (OVH, R2, B2,
+   Wasabi, MinIO) is addressed.
+
+   securityToken and sessionToken are for temporary credentials and are not
+   used with a static access key, but they are declared required and typed
+   SecretKeyOptional - a discriminated object, not a nullable scalar. null
+   is rejected with "Missing or invalid '@type' property"; the way to say
+   "unset" is the None variant. Same for accessKey/secretKey, which use the
+   Value variant to carry a literal.
+
+   verifyAfterWrite defaults to true and is left on deliberately: it costs
+   one extra request per write and catches an S3-compatible backend that
+   acknowledges a write without persisting it. Losing a message body to
+   that would be silent and unrecoverable. #}
+{{ {"@type": "update", "object": "BlobStore", "value": {
+     "@type": "S3",
+     "region": {
+       "@type": "Custom",
+       "customEndpoint": s3_endpoint,
+       "customRegion": s3_region},
+     "bucket": s3_bucket,
+     "accessKey": {"@type": "Value", "value": s3_access_key},
+     "secretKey": {"@type": "Value", "secret": s3_secret_key},
+     "securityToken": {"@type": "None"},
+     "sessionToken": {"@type": "None"},
+     "keyPrefix": s3_key_prefix | default(none, true),
+     "timeout": 30000,
+     "maxRetries": 3,
+     "verifyAfterWrite": true}} | to_json }}
+{# Bulwark runs in the browser and calls JMAP on {{ mail_hostname }} while
+   the page itself was served from {{ webmail_hostname }}. That is a
+   cross-origin request, and Stalwart sends no CORS headers by default, so
+   the webmail login fails with "the server is reachable but is blocking
+   cross-origin requests".
+
+   usePermissiveCors is the only knob offered - there is no per-origin
+   allowlist - so this allows all origins. The JMAP API still requires
+   authentication; what this changes is which pages a browser will let talk
+   to it. Acceptable here because the two hostnames are the same
+   deployment, but it is broader than ideal and worth knowing about. #}
+{{ {"@type": "update", "object": "Http", "value": {
+     "usePermissiveCors": true}} | to_json }}
+{# proxyTrustedNetworks is the fix for the ban loop: without it Stalwart
+    takes the TCP peer address as the client address, so every request
+    proxied by Caddy looks like it originated from Caddy. Scanner traffic
+    against the public hostname then gets attributed to the proxy, and
+    Stalwart bans it - taking the admin console and webmail down. #}
+{{ {"@type": "update", "object": "SystemSettings", "value": {
+     "defaultHostname": mail_hostname,
+     "defaultDomainId": "#domain-primary",
+     "mailExchangers": {"0": {"hostname": none, "priority": 10}},
+     "maxConnections": 8192,
+     "proxyTrustedNetworks": {mailstack_subnet_v4: true, mailstack_subnet_v6: true}}} | to_json }}

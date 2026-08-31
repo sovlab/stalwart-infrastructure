@@ -1,0 +1,20 @@
+# Managed by Ansible - roles/mailstack. Overlay used only while provisioning
+# a fresh server:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.recovery.yml up -d
+#
+# Recovery mode starts Stalwart with every background service disabled - no
+# MTA, no task workers, no scheduled jobs - and exposes only the management
+# API on 8080, which is what `stalwart-cli apply` talks to before any
+# accounts exist. STALWART_RECOVERY_ADMIN provisions a temporary credential
+# that bypasses the directory, since the directory is empty at that point.
+#
+# Both variables are deliberately absent from docker-compose.yml. Stalwart's
+# docs are explicit that the recovery admin is a backdoor credential and must
+# not be left set on a running deployment, so the normal `up` recreates the
+# container without it.
+services:
+  stalwart:
+    environment:
+      STALWART_RECOVERY_MODE: "1"
+      STALWART_RECOVERY_ADMIN: "admin:{{ stalwart_recovery_password }}"

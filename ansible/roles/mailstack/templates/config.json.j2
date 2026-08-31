@@ -1,0 +1,13 @@
+{# Managed by Ansible - roles/mailstack. This is the only Stalwart config
+   left on disk in v0.16: it names the data store and nothing else. Every
+   other setting is an object inside that store, applied from
+   plan.ndjson.j2 with `stalwart-cli apply`.
+
+   RocksDB keeps metadata, indexes and the search index on local disk under
+   the container's persistent volume. Message bodies do not live here: the
+   plan points the BlobStore at S3, so this directory stays small and the
+   bulk of the data is off the box. #}
+{
+  "@type": "RocksDb",
+  "path": "/var/lib/stalwart/db"
+}

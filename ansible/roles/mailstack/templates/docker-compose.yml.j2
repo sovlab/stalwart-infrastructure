@@ -1,33 +1,35 @@
 # Managed by Ansible - roles/mailstack. Re-run playbooks/10-site.yml to
 # apply changes; do not edit by hand on the host.
-services:
-  postgres:
-    image: postgres:17-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: "{{ postgres_db }}"
-      POSTGRES_USER: "{{ postgres_user }}"
-      POSTGRES_PASSWORD: "{{ postgres_password }}"
-    volumes:
-      - "{{ data_mount }}/postgres:/var/lib/postgresql/data"
-    networks: [internal]
+#
+# The project name is pinned rather than derived from the directory, so
+# the network keeps a stable name that the stalwart-cli container can be
+# attached to when provisioning.
+name: mailstack
 
+services:
   stalwart:
     image: stalwartlabs/stalwart:v0.16
     restart: unless-stopped
-    depends_on: [postgres]
     # 8080 (plain HTTP JMAP/WebUI/admin) is reached by Caddy over the
     # internal network only - never published to the host. 25/465/993 are
     # Stalwart's own raw SMTP/IMAP TLS listeners, published directly since
-    # Caddy can't proxy raw TCP; they get their certs from cron-synced
-    # copies of Caddy's ACME cert (see roles/mailstack/files/sync-certs.sh).
+    # Caddy can't proxy raw TCP.
     ports:
       - "25:25"
       - "465:465"
       - "993:993"
+    # v0.16 replaced the old single /opt/stalwart volume with these two, and
+    # the image declares both as VOLUME. Leaving either unmapped gets you an
+    # anonymous volume, which `docker compose down` orphans rather than
+    # deletes - the next `up` then starts with no config.json and drops
+    # straight back into bootstrap mode. Both dirs are chowned to uid 2000
+    # by roles/mailstack; see the task there for why.
     volumes:
-      - "{{ data_mount }}/stalwart/data:/opt/stalwart"
-      - "{{ data_mount }}/stalwart/cert:/opt/stalwart/cert"
+      # config.json - the only Stalwart config left on disk in v0.16;
+      # everything else is an object in the data store.
+      - "{{ data_dir }}/stalwart/etc:/etc/stalwart"
+      # RocksDB, local blobs, bootstrap registry.
+      - "{{ data_dir }}/stalwart/data:/var/lib/stalwart"
     networks: [internal]
 
   caddy:
@@ -40,8 +42,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - "{{ data_mount }}/caddy/data:/data"
-      - "{{ data_mount }}/caddy/config:/config"
+      - "{{ data_dir }}/caddy/data:/data"
+      - "{{ data_dir }}/caddy/config:/config"
     networks: [internal]
 
   bulwark:
@@ -51,17 +53,24 @@ services:
       PORT: "{{ bulwark_internal_port }}"
       JMAP_SERVER_URL: "https://{{ mail_hostname }}"
     volumes:
-      - "{{ data_mount }}/bulwark/admin:/app/data/admin"
-      - "{{ data_mount }}/bulwark/admin-state:/app/data/admin-state"
-      - "{{ data_mount }}/bulwark/settings:/app/data/settings"
+      - "{{ data_dir }}/bulwark/admin:/app/data/admin"
+      - "{{ data_dir }}/bulwark/admin-state:/app/data/admin-state"
+      - "{{ data_dir }}/bulwark/settings:/app/data/settings"
     networks: [internal]
 
 networks:
   # enable_ipv6 is per-network - the daemon-level "ipv6" setting in
   # /etc/docker/daemon.json (roles/docker) only covers the default
   # bridge, not this custom one.
+  #
+  # Both subnets are pinned rather than left to Docker's address pool.
+  # Stalwart's configuration has to name this network twice - as a trusted
+  # proxy source, and on its IP allowlist - because Caddy reaches it from
+  # here. An address Docker picked at random would drift on the next
+  # rebuild and silently stop matching.
   internal:
     enable_ipv6: true
     ipam:
       config:
-        - subnet: fd00:dead:beef:1::/64
+        - subnet: "{{ mailstack_subnet_v4 }}"
+        - subnet: "{{ mailstack_subnet_v6 }}"

@@ -1,4 +1,24 @@
 ---
+# Several Ubuntu cloud images ship Docker as a snap, and the snap daemon
+# takes /var/run/docker.sock before docker-ce is ever installed. It is
+# strictly confined and cannot see {{ data_dir }}, so every bind mount
+# resolves inside snapd's own mount namespace instead of on the data
+# volume, and /etc/docker/daemon.json is ignored in favour of
+# /var/snap/docker/current/config/daemon.json. The failure is silent:
+# containers start, `docker inspect` reports the paths you asked for, and
+# nothing is persisted. Remove it before installing docker-ce.
+- name: Check whether Docker is installed as a snap
+  ansible.builtin.command: snap list docker
+  register: docker_snap
+  changed_when: false
+  failed_when: false
+
+- name: Remove the Docker snap
+  ansible.builtin.command: snap remove --purge docker
+  when: docker_snap.rc == 0
+  register: docker_snap_removed
+  changed_when: docker_snap_removed.rc == 0
+
 - name: Add Docker apt repository
   ansible.builtin.deb822_repository:
     name: docker
@@ -36,7 +56,6 @@
           "max-size": "10m",
           "max-file": "3"
         },
-        "data-root": "{{ data_mount }}/docker",
         "ipv6": true,
         "fixed-cidr-v6": "fd00:dead:beef::/64",
         "ip6tables": true
@@ -44,30 +63,33 @@
     mode: "0644"
   notify: Restart docker
 
-# data-root above lives on {{ data_mount }}, a separate mounted volume.
-# docker.service has no built-in reason to wait for it, so on boot there's
-# a race: if Docker starts first, it initializes a fresh empty state at
-# that path on the root filesystem, which the real volume then mounts
-# over a moment later - Docker's previous containers/images appear to
-# have vanished even though restart policies were set correctly.
-- name: Create docker.service systemd drop-in directory
-  ansible.builtin.file:
-    path: /etc/systemd/system/docker.service.d
-    state: directory
-    mode: "0755"
-
-- name: Make Docker wait for the data volume to be mounted before starting
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/docker.service.d/data-mount.conf
-    content: |
-      [Unit]
-      RequiresMountsFor={{ data_mount }}
-    mode: "0644"
-  register: docker_mount_dropin
-
 - name: Enable and start Docker
   ansible.builtin.systemd:
     name: docker
-    daemon_reload: "{{ docker_mount_dropin.changed }}"
     enabled: true
     state: started
+
+# The snap removal above covers the case this repo has actually hit, but
+# any second daemon holding the socket produces the same silent breakage.
+# Checking the reported root dir is a cheap proxy: if it isn't the one
+# daemon.json asks for, we are not talking to the daemon we configured.
+- name: Apply any pending daemon restart before verifying
+  ansible.builtin.meta: flush_handlers
+
+- name: Read Docker's effective data root
+  ansible.builtin.command: docker info --format {% raw %}{{.DockerRootDir}}{% endraw %}
+  register: docker_root_dir
+  changed_when: false
+
+- name: Fail if another Docker daemon owns the socket
+  ansible.builtin.assert:
+    that:
+      - docker_root_dir.stdout | trim == "/var/lib/docker"
+    success_msg: "Docker is reading /etc/docker/daemon.json (root dir: {{ docker_root_dir.stdout | trim }})"
+    fail_msg: >-
+      Docker reports its root directory as "{{ docker_root_dir.stdout | trim }}",
+      not /var/lib/docker, so it is not reading
+      /etc/docker/daemon.json. Another daemon owns /var/run/docker.sock,
+      usually a Docker snap. Bind mounts would resolve inside that daemon's
+      mount namespace rather than on the host, which fails silently.
+      Resolve this before deploying the mail stack.

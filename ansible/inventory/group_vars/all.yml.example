@@ -13,9 +13,12 @@ webmail_hostname: webmail.CHANGEME_DOMAIN.example # Bulwark
 timezone: UTC
 
 # --- storage --------------------------------------------------------------
-data_device: /dev/sdb
-data_mount: /data
-mailstack_dir: "{{ data_mount }}/mailstack"
+# A plain directory on the root filesystem: no second block volume, nothing
+# to format or mount. Stalwart's local footprint here is metadata, indexes
+# and the search index only - message bodies live in S3 (see below), so this
+# stays small.
+data_dir: /data
+mailstack_dir: "{{ data_dir }}/mailstack"
 
 # --- tailscale --------------------------------------------------------------
 # Requires TAILSCALE_AUTHKEY in the environment (loaded from .env via mise).
@@ -28,11 +31,12 @@ tailscale_hostname: mail01
 tailscale_tags:
   - tag:mailserver
 
-# --- cloudflare (future DNS record automation - not yet used by any role) --
+# --- cloudflare -----------------------------------------------------------
 # Requires CLOUDFLARE_API_TOKEN in the environment. Scope it to
-# Zone:DNS:Edit on your zone only. Not consumed yet: DNS-01/record
-# automation is on the roadmap (see README). Caddy uses HTTP-01 against the
-# ports it already owns, so nothing in this repo needs the token today.
+# Zone:DNS:Edit on your zone only. No role reads this var: the token is
+# entered by hand into Stalwart's setup wizard, which uses it to publish
+# DNS records and to answer ACME DNS-01 challenges. It is kept here so the
+# value lives in one place alongside everything else.
 cloudflare_api_token: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_API_TOKEN') }}"
 
 # --- firewall ---------------------------------------------------------------
@@ -47,14 +51,96 @@ public_tcp_ports:
   - 80   # Caddy ACME HTTP-01 challenge + http->https redirect
   - 443  # HTTPS (Caddy: webmail + JMAP + webadmin)
 
-# --- mail stack ---------------------------------------------------------
-postgres_db: stalwart
-postgres_user: stalwart
-postgres_password: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') }}"
+# --- blob storage ---------------------------------------------------------
+# Where message bodies, attachments and Sieve scripts are kept. Any
+# S3-compatible provider works: Stalwart addresses them through a custom
+# endpoint plus region name rather than an AWS region enum.
+#
+# Worth choosing deliberately given what this repo is for: mail bodies
+# leaving the VPS land under whatever jurisdiction the provider sits in.
+#
+# No trailing slash on the endpoint: it is concatenated with object paths,
+# and SigV4 signs the canonical URI, so a doubled slash surfaces as a
+# signature mismatch rather than a clear error.
+#
+# Examples:
+#   OVHcloud       endpoint https://s3.<region>.io.cloud.ovh.net
+#                  region   <region>, e.g. bhs, gra, sbg, de, waw
+#   Cloudflare R2  endpoint https://<account>.r2.cloudflarestorage.com
+#                  region   auto
+#   Backblaze B2   endpoint https://s3.<region>.backblazeb2.com
+#                  region   <region>, e.g. eu-central-003
+#   MinIO          endpoint https://minio.example.com
+#                  region   us-east-1
+s3_endpoint: "https://s3.{{ s3_region }}.io.cloud.ovh.net"
+s3_region: CHANGEME_S3_REGION
+s3_bucket: CHANGEME_S3_BUCKET
+s3_key_prefix: ""     # optional, leave empty for none
+s3_access_key: "{{ lookup('ansible.builtin.env', 'S3_ACCESS_KEY') }}"
+s3_secret_key: "{{ lookup('ansible.builtin.env', 'S3_SECRET_KEY') }}"
 
-# Set after completing Stalwart's one-time setup wizard (see README):
-# create a scoped API key in the WebUI, put it in .env as STALWART_API_KEY.
-# Blank until then - the cert-sync timer is skipped when it's empty.
-stalwart_api_key: "{{ lookup('ansible.builtin.env', 'STALWART_API_KEY') }}"
+# --- mail stack ---------------------------------------------------------
 
 bulwark_internal_port: 3000
+
+# The mail stack's private Docker network. Pinned because Stalwart must be
+# told this range is a reverse proxy: without it, it reads Caddy's address
+# as the client address for every proxied request, attributes the internet's
+# scanner traffic to Caddy, and bans it - which takes the admin console and
+# webmail down with it. Change these only if they collide with another
+# network on the host.
+mailstack_subnet_v4: 172.18.0.0/16
+mailstack_subnet_v6: fd00:dead:beef:1::/64
+
+# --- stalwart declarative configuration -----------------------------------
+# roles/mailstack renders these into plan.ndjson and applies them with
+# stalwart-cli. There is no setup wizard: a fresh server is provisioned from
+# this file, and re-running the playbook reconciles a live one to match it.
+#
+# Passwords live here rather than in .env because there is one per account.
+# all.yml is gitignored, but `ansible-vault encrypt` on this file is the
+# right move if the checkout is ever shared.
+
+# Pin the minor series; the CLI ships separately from the server and
+# versions independently of it (latest release at time of writing: v1.0.12).
+stalwart_cli_image: ghcr.io/stalwartlabs/cli:1.0
+
+# Temporary credential used only while provisioning a fresh server, before
+# any account exists. Stalwart treats it as a backdoor that bypasses the
+# directory, so the role sets it exclusively in the recovery-mode overlay
+# and recreates the container without it once the plan has been applied.
+stalwart_recovery_password: CHANGEME_RECOVERY_PASSWORD
+
+# The account the playbook authenticates as when applying the plan to an
+# already-provisioned server. Must name one of stalwart_accounts, with
+# role Admin.
+stalwart_admin_account: admin
+
+# name is the local part; the address becomes name@{{ domain }}. role is
+# Admin or User. Removing an entry here does NOT delete the account: the
+# plan is built from upserts, which never destroy.
+# Stalwart's network listeners. These do NOT exist by default: the setup
+# wizard creates them, and a server provisioned declaratively through
+# recovery mode starts with only the management listener on 8080. Without
+# this list Stalwart answers nothing on 25/465/993 and the ports refuse
+# connections from outside even though Docker is publishing them.
+#
+# Keep in step with public_tcp_ports above and with the compose file's
+# published ports. tls_implicit false on 25 means STARTTLS, which is what
+# port 25 expects; 465/993/443 are implicit TLS.
+#
+# pop3s (995) and manageSieve (4190) are deliberately absent, matching the
+# hardening note on public_tcp_ports. Add them here if you want them.
+stalwart_listeners:
+  - { name: smtp,        protocol: smtp, port: 25,   tls_implicit: false }
+  - { name: submissions, protocol: smtp, port: 465,  tls_implicit: true }
+  - { name: imaps,       protocol: imap, port: 993,  tls_implicit: true }
+  - { name: https,       protocol: http, port: 443,  tls_implicit: true }
+  # Plaintext, reached only by Caddy over the internal Docker network.
+  - { name: http,        protocol: http, port: 8080, tls_implicit: false, use_tls: false }
+
+stalwart_accounts:
+  - name: admin
+    description: System administrator
+    role: Admin
+    password: CHANGEME_ADMIN_PASSWORD

@@ -13,3 +13,8 @@ wheels/
 # Real per-deployment values - see the .example files alongside these
 ansible/inventory/hosts.yml
 ansible/inventory/group_vars/all.yml
+
+# Snapshot plans from `stalwart-cli snapshot --include-secrets`: these carry
+# DKIM private keys, API tokens and account credentials in the clear.
+plan.ndjson
+*.ndjson

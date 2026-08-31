@@ -72,29 +72,13 @@
     enabled: true
     state: started
 
-# --- data volume ------------------------------------------------------------
+# --- data directory ---------------------------------------------------------
 
-- name: Check whether the data device already has a filesystem
-  ansible.builtin.command: "blkid {{ data_device }}"
-  register: data_blkid
-  changed_when: false
-  failed_when: false
-
-- name: Create ext4 filesystem on data volume
-  community.general.filesystem:
-    fstype: ext4
-    dev: "{{ data_device }}"
-  when: data_blkid.rc != 0
-
-- name: Create data mount point
+# Plain directory on the root filesystem. There is no second block volume
+# to format or mount: Stalwart keeps only metadata and indexes locally, and
+# message bodies go to S3.
+- name: Create the mail stack data directory
   ansible.builtin.file:
-    path: "{{ data_mount }}"
+    path: "{{ data_dir }}"
     state: directory
     mode: "0755"
-
-- name: Mount data volume
-  ansible.posix.mount:
-    path: "{{ data_mount }}"
-    src: "{{ data_device }}"
-    fstype: ext4
-    state: mounted

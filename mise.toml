@@ -3,6 +3,12 @@ ansible = { version = "latest", pipx_args = "--include-deps", uvx = false }
 python = "latest"
 uv = "latest"
 
+# Stalwart's admin CLI. Ships separately from the server and is deliberately
+# not in the Docker image, so it is a local tool here. Pinned to a version
+# rather than "latest": it drives `apply` against a live mail server, and an
+# unannounced change in behaviour is not something to discover mid-playbook.
+"ubi:stalwartlabs/cli" = { version = "1.0.12", exe = "stalwart-cli" }
+
 [env]
 _.python.venv = { path = ".venv", create = true }
 _.file = ".env"

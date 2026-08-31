@@ -4,5 +4,19 @@
 }
 
 {{ mail_hostname }} {
-	reverse_proxy stalwart:8080
+	# PROXY protocol carries the real client address to Stalwart. Without it
+	# Stalwart sees every proxied request as coming from Caddy, and since a
+	# single scanner probe for a path like /wp-login.php is an instant ban
+	# (Security.scanBanPaths), the proxy gets banned within hours and takes
+	# the admin console down with it.
+	#
+	# This has to stay in step with SystemSettings.proxyTrustedNetworks in
+	# roles/mailstack/templates/plan.ndjson.j2, which is what tells Stalwart
+	# to expect the header from this network. Enabling either side alone
+	# breaks the listener: Stalwart logs "invalid proxy header" and resets.
+	reverse_proxy stalwart:8080 {
+		transport http {
+			proxy_protocol v2
+		}
+	}
 }

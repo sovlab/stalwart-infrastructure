@@ -1,10 +1,25 @@
 ---
-- name: Fail early if POSTGRES_PASSWORD is not set
+- name: Fail early if required secrets and accounts are missing
   ansible.builtin.assert:
     that:
-      - postgres_password is defined
-      - postgres_password | length > 0
-    fail_msg: "POSTGRES_PASSWORD is empty. Set it in .env before running this playbook."
+      - cloudflare_api_token | default("", true) | length > 0
+      - s3_endpoint | default("", true) | length > 0
+      - s3_bucket | default("", true) | length > 0
+      - s3_access_key | default("", true) | length > 0
+      - s3_secret_key | default("", true) | length > 0
+      - stalwart_recovery_password | default("", true) | length > 0
+      - stalwart_accounts | default([], true) | length > 0
+      - stalwart_admin_account in (stalwart_accounts | map(attribute="name") | list)
+      - stalwart_accounts | rejectattr("password", "defined") | list | length == 0
+    fail_msg: >-
+      Configuration is incomplete. CLOUDFLARE_API_TOKEN, S3_ACCESS_KEY and
+      S3_SECRET_KEY must be set in .env; s3_endpoint and s3_bucket,
+      stalwart_recovery_password, stalwart_admin_account
+      and stalwart_accounts must be set in group_vars/all.yml, every account
+      needs a password, and stalwart_admin_account must name one of them.
+      The Cloudflare token is no longer optional: Stalwart uses it to publish
+      DNS records and to answer the ACME DNS-01 challenge when it renews its
+      own certificate.
 
 - name: Create mail stack directories
   ansible.builtin.file:
@@ -14,20 +29,81 @@
   loop:
     - "{{ mailstack_dir }}"
     - "{{ mailstack_dir }}/caddy-config"
-    - "{{ data_mount }}/postgres"
-    - "{{ data_mount }}/stalwart/data"
-    - "{{ data_mount }}/stalwart/cert"
-    - "{{ data_mount }}/caddy/data"
-    - "{{ data_mount }}/caddy/config"
-    - "{{ data_mount }}/bulwark/admin"
-    - "{{ data_mount }}/bulwark/admin-state"
-    - "{{ data_mount }}/bulwark/settings"
+    - "{{ data_dir }}/caddy/data"
+    - "{{ data_dir }}/caddy/config"
+    - "{{ data_dir }}/bulwark/admin"
+    - "{{ data_dir }}/bulwark/admin-state"
+    - "{{ data_dir }}/bulwark/settings"
+
+# Stalwart's own two directories are created separately because the
+# container runs as an unprivileged user (uid 2000) and has to be able to
+# write both: config.json into /etc/stalwart, and RocksDB + blobs into
+# /var/lib/stalwart. Named volumes inherit the right ownership on their
+# own; bind mounts keep whatever the host gave them, which would be
+# root:root here, and the server exits on the first write it can't make.
+- name: Create Stalwart's directories, owned by the container's uid
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+    owner: "2000"
+    group: "2000"
+  loop:
+    - "{{ data_dir }}/stalwart/etc"
+    - "{{ data_dir }}/stalwart/data"
+
+- name: Render Stalwart's data store configuration
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ data_dir }}/stalwart/etc/config.json"
+    owner: "2000"
+    group: "2000"
+    mode: "0640"
+  no_log: true
+
+- name: Render the declarative configuration plan
+  ansible.builtin.template:
+    src: plan.ndjson.j2
+    dest: "{{ mailstack_dir }}/plan.ndjson"
+    mode: "0600"   # embeds the Cloudflare token and every account password
+  no_log: true
+
+# stalwart-cli credentials go in env files rather than on the `docker run`
+# command line: that keeps them out of `ps` and out of Ansible's own output,
+# which in turn means the apply tasks below do not need no_log and their
+# errors stay readable when something in the plan is rejected.
+- name: Write stalwart-cli credentials for recovery-mode provisioning
+  ansible.builtin.copy:
+    content: |
+      STALWART_URL=http://stalwart:8080
+      STALWART_USER=admin
+      STALWART_PASSWORD={{ stalwart_recovery_password }}
+    dest: "{{ mailstack_dir }}/.cli-recovery.env"
+    mode: "0600"
+  no_log: true
+
+- name: Write stalwart-cli credentials for the running server
+  ansible.builtin.copy:
+    content: |
+      STALWART_URL=https://{{ mail_hostname }}
+      STALWART_USER={{ stalwart_admin_account }}@{{ domain }}
+      STALWART_PASSWORD={{ stalwart_accounts | selectattr('name', 'eq', stalwart_admin_account) | map(attribute='password') | first }}
+    dest: "{{ mailstack_dir }}/.cli.env"
+    mode: "0600"
+  no_log: true
 
 - name: Render docker-compose.yml
   ansible.builtin.template:
     src: docker-compose.yml.j2
     dest: "{{ mailstack_dir }}/docker-compose.yml"
     mode: "0644"
+
+- name: Render the recovery-mode compose overlay
+  ansible.builtin.template:
+    src: docker-compose.recovery.yml.j2
+    dest: "{{ mailstack_dir }}/docker-compose.recovery.yml"
+    mode: "0600"   # embeds the recovery admin credential
+  no_log: true
 
 - name: Render Caddyfile
   ansible.builtin.template:
@@ -41,57 +117,176 @@
     dest: "{{ mailstack_dir }}/caddy-config/Dockerfile"
     mode: "0644"
 
+# --- provisioning -------------------------------------------------------
+# A server with a config.json but an empty database cannot be reached: it
+# starts normally, finds no accounts, and offers no wizard, because the
+# wizard only runs when config.json is absent. Stalwart's answer is recovery
+# mode - management API only, mail services down, a temporary admin from the
+# environment - which is where the plan gets applied. Once that has
+# succeeded the marker below keeps every later run on the ordinary path,
+# applying the plan to the live server instead.
+
+- name: Check whether this server has already been provisioned
+  ansible.builtin.stat:
+    path: "{{ mailstack_dir }}/.provisioned"
+  register: stalwart_provisioned
+
+- name: Provision a fresh server
+  when: not stalwart_provisioned.stat.exists
+  block:
+    - name: Start the stack with Stalwart in recovery mode
+      ansible.builtin.command:
+        cmd: >-
+          docker compose -f docker-compose.yml -f docker-compose.recovery.yml
+          up -d --build --remove-orphans
+        chdir: "{{ mailstack_dir }}"
+      changed_when: true
+
+    - name: Wait for the recovery management API
+      ansible.builtin.command:
+        cmd: >-
+          docker run --rm --network mailstack_internal
+          --env-file {{ mailstack_dir }}/.cli-recovery.env
+          {{ stalwart_cli_image }} describe
+        chdir: "{{ mailstack_dir }}"
+      register: stalwart_recovery_ready
+      changed_when: false
+      failed_when: false
+      until: stalwart_recovery_ready.rc == 0
+      retries: 20
+      delay: 5
+
+    - name: Fail if the recovery API never came up
+      ansible.builtin.fail:
+        msg: >-
+          Stalwart's recovery API did not answer within 100s. Check
+          `docker compose logs stalwart` in {{ mailstack_dir }}.
+      when: stalwart_recovery_ready.rc != 0
+
+    # The plan arrives on stdin rather than as a bind mount. The CLI image
+    # runs as a non-root user, so it cannot read a 0600 root-owned file
+    # mounted into the container, and the plan has to stay 0600: it carries
+    # the Cloudflare token and every account password. Piping sidesteps the
+    # ownership question entirely and keeps the file off the container's
+    # filesystem.
+    - name: Apply the configuration plan
+      ansible.builtin.shell:
+        cmd: >-
+          docker run --rm -i --network mailstack_internal
+          --env-file {{ mailstack_dir }}/.cli-recovery.env
+          {{ stalwart_cli_image }} apply --stdin
+          < {{ mailstack_dir }}/plan.ndjson
+        chdir: "{{ mailstack_dir }}"
+      register: stalwart_apply
+      changed_when: true
+
+    - name: Record that provisioning succeeded
+      ansible.builtin.copy:
+        content: "Provisioned by roles/mailstack. Delete to force re-provisioning from scratch.\n"
+        dest: "{{ mailstack_dir }}/.provisioned"
+        mode: "0644"
+
+    - name: Restart Stalwart without the recovery credentials
+      ansible.builtin.command:
+        cmd: docker compose up -d --force-recreate stalwart
+        chdir: "{{ mailstack_dir }}"
+      changed_when: true
+
+# --remove-orphans because Ansible owns this compose project outright: a
+# container left behind by a service that has since been removed from the
+# template (postgres, when the data store moved to RocksDB) keeps holding an
+# endpoint on the network, and compose then cannot recreate that network to
+# apply a changed subnet. It fails the run rather than working around it.
 - name: Deploy the mail stack
-  ansible.builtin.command: docker compose up -d --build
-  args:
+  ansible.builtin.command:
+    cmd: docker compose up -d --build --remove-orphans
     chdir: "{{ mailstack_dir }}"
   register: compose_up
   changed_when: >-
     'Started' in compose_up.stderr or 'Created' in compose_up.stderr
     or 'Recreated' in compose_up.stderr
 
-- name: Wait for Stalwart's one-time bootstrap admin credentials to appear in its logs
-  ansible.builtin.shell: >
-    docker compose logs --no-color stalwart 2>&1
-    | grep -A3 "temporary administrator account"
-  args:
+# Re-applying against the running server is what makes configuration
+# changes declarative: edit group_vars, re-run the playbook, and the plan
+# reconciles. Every operation is an upsert, so this converges rather than
+# duplicating. It authenticates as one of the accounts the plan itself
+# defines, which is why no separate API token is needed.
+- name: Apply the configuration plan to the running server
+  ansible.builtin.shell:
+    cmd: >-
+      docker run --rm -i
+      --env-file {{ mailstack_dir }}/.cli.env
+      {{ stalwart_cli_image }} apply --stdin
+      < {{ mailstack_dir }}/plan.ndjson
     chdir: "{{ mailstack_dir }}"
-  register: stalwart_bootstrap_creds
+  when: stalwart_provisioned.stat.exists
+  register: stalwart_reapply
+  changed_when: true
+
+# --- retired data volume ------------------------------------------------
+# Earlier versions of this repo put {{ data_dir }} on a dedicated block
+# device, formatted and mounted by roles/bootstrap. That is gone, but the
+# fstab line it wrote is not: removing an ansible.posix.mount task does not
+# remove its entry, so the old volume keeps remounting at every boot.
+#
+# The guard matters. Dropping the fstab line while the volume is still
+# mounted would leave the running system on the volume and the next boot on
+# an empty directory of the same name underneath it, with the data intact
+# but invisible. So this only tidies fstab once an operator has actually
+# unmounted the volume by hand; until then it does nothing and says so.
+- name: Check whether {{ data_dir }} is still a separate mount
+  ansible.builtin.command: "mountpoint -q {{ data_dir }}"
+  register: data_dir_is_mount
   changed_when: false
   failed_when: false
-  until: stalwart_bootstrap_creds.rc == 0
-  retries: 10
-  delay: 3
 
-- name: Show Stalwart's bootstrap admin credentials
+- name: Warn that the retired data volume is still mounted
   ansible.builtin.debug:
     msg: >-
-      {{ stalwart_bootstrap_creds.stdout
-         if stalwart_bootstrap_creds.rc == 0
-         else "No bootstrap credentials found in Stalwart's logs - initial setup is probably already done. If not, check `docker compose logs stalwart` by hand." }}
+      {{ data_dir }} is still a separate mounted volume. This repo no longer
+      needs one. To retire it: stop the stack, copy anything you want to
+      keep off {{ data_dir }}, `umount {{ data_dir }}`, then re-run this
+      playbook and it will remove the fstab entry. The disk can then be
+      detached at your VPS provider.
+  when: data_dir_is_mount.rc == 0
 
-# --- cert sync: copies Caddy's cert into Stalwart's cert dir and asks
-# Stalwart to reload it. See templates/sync-certs.sh.j2 for why this is a
-# script + timer rather than something Ansible does directly: it has to
-# run on every renewal, not just at provisioning time.
+- name: Remove the retired data volume from fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^[^#]*\\s{{ data_dir | regex_escape }}\\s"
+    state: absent
+  when: data_dir_is_mount.rc != 0
 
-- name: Render cert-sync script
-  ansible.builtin.template:
-    src: sync-certs.sh.j2
-    dest: "{{ mailstack_dir }}/sync-certs.sh"
-    mode: "0700"   # embeds the Stalwart API key once set - keep it private
+# --- cert sync removal ------------------------------------------------
+# Stalwart issues and renews its own certificate now (ACME with the DNS-01
+# challenge, via the Cloudflare integration configured in the setup wizard),
+# so the timer that used to copy Caddy's cert into Stalwart is gone. There
+# is nothing left to copy: v0.16 keeps certificates in the data store as
+# Certificate objects rather than as files on disk, and the API endpoint the
+# old script called to reload them no longer exists.
+#
+# These three tasks only clean up hosts provisioned before that change.
+# They can be deleted once every host has run this playbook at least once.
 
-- name: Install cert-sync systemd unit
-  ansible.builtin.template:
-    src: "mailstack-cert-sync.{{ item }}.j2"
-    dest: "/etc/systemd/system/mailstack-cert-sync.{{ item }}"
-    mode: "0644"
-  loop: [service, timer]
-  register: cert_sync_units
-
-- name: Enable cert-sync timer
+- name: Stop and disable the retired cert-sync timer
   ansible.builtin.systemd:
     name: mailstack-cert-sync.timer
-    daemon_reload: "{{ cert_sync_units.changed }}"
-    enabled: true
-    state: started
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: Remove the retired cert-sync files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/mailstack-cert-sync.timer
+    - /etc/systemd/system/mailstack-cert-sync.service
+    - "{{ mailstack_dir }}/sync-certs.sh"
+    - "{{ data_dir }}/stalwart/cert"
+  register: cert_sync_removed
+
+- name: Reload systemd after removing the cert-sync units
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: cert_sync_removed.changed

@@ -83,6 +83,12 @@ s3_secret_key: "{{ lookup('ansible.builtin.env', 'S3_SECRET_KEY') }}"
 
 bulwark_internal_port: 3000
 
+# Encrypts Bulwark's persistent "remember me" sessions, settings sync and
+# server-side OAuth PKCE state. Without it Bulwark logs "Failed to store
+# Stalwart auth context {error: SESSION_SECRET not configured}" and TOTP
+# login never completes. Generate with `openssl rand -base64 32`.
+bulwark_session_secret: CHANGEME_BULWARK_SESSION_SECRET
+
 # The mail stack's private Docker network. Pinned because Stalwart must be
 # told this range is a reverse proxy: without it, it reads Caddy's address
 # as the client address for every proxied request, attributes the internet's

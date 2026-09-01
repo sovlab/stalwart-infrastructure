@@ -44,7 +44,18 @@ services:
     volumes:
       - "{{ data_dir }}/caddy/data:/data"
       - "{{ data_dir }}/caddy/config:/config"
-    networks: [internal]
+    # Aliases {{ mail_hostname }} to this container on Docker's embedded DNS,
+    # so bulwark's server-side fetches to JMAP_SERVER_URL resolve straight to
+    # Caddy instead of the public IP. Without this, a request to the public
+    # hostname leaves the container, hits the host's own external interface,
+    # and needs hairpin NAT to loop back in to the very container that made
+    # it - unsupported here, so it times out rather than erroring outright.
+    # Caddy still routes correctly since it matches on the Host/SNI header,
+    # not on which interface the connection arrived over.
+    networks:
+      internal:
+        aliases:
+          - "{{ mail_hostname }}"
 
   bulwark:
     image: ghcr.io/bulwarkmail/webmail:1.8
@@ -52,6 +63,7 @@ services:
     environment:
       PORT: "{{ bulwark_internal_port }}"
       JMAP_SERVER_URL: "https://{{ mail_hostname }}"
+      SESSION_SECRET: "{{ bulwark_session_secret }}"
     volumes:
       - "{{ data_dir }}/bulwark/admin:/app/data/admin"
       - "{{ data_dir }}/bulwark/admin-state:/app/data/admin-state"

@@ -52,6 +52,7 @@ services:
     environment:
       PORT: "{{ bulwark_internal_port }}"
       JMAP_SERVER_URL: "https://{{ mail_hostname }}"
+      SESSION_SECRET: "{{ bulwark_session_secret }}"
     volumes:
       - "{{ data_dir }}/bulwark/admin:/app/data/admin"
       - "{{ data_dir }}/bulwark/admin-state:/app/data/admin-state"

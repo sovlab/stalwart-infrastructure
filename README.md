@@ -127,6 +127,7 @@ ansible/
     docker/                 # Docker Engine + compose plugin
     firewall/               # ufw + ufw-docker
     mailstack/              # Stalwart + Caddy + Bulwark
+tools/                    # standalone troubleshooting scripts, see tools/README.md
 ```
 
 ## Getting started
@@ -269,6 +270,15 @@ three lines in `stalwart_accounts`.
 
 Removing an entry from `stalwart_accounts` does **not** delete the account.
 Upserts never destroy. Delete accounts in the WebUI.
+
+## Maintenance
+
+Day-two operations (updating the containers, reading Stalwart's logs,
+diagnosing mail that will not deliver, backups, break-glass) are in
+[MAINTENANCE.md](MAINTENANCE.md).
+
+The short version: OS patching and TLS renewal look after themselves,
+container image updates and backups do not.
 
 ## Security model
 

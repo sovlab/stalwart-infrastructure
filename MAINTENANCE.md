@@ -71,7 +71,7 @@ Not automatic, and yours to do:
 | Component | Image | Pinned in |
 |---|---|---|
 | Stalwart | `stalwartlabs/stalwart:v0.16` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
-| Bulwark | `ghcr.io/bulwarkmail/webmail:1.8` | same file |
+| Bulwark | `ghcr.io/bulwarkmail/webmail:1.9` | same file |
 | Caddy | `caddy:2-alpine` (built locally) | `ansible/roles/mailstack/files/Dockerfile.caddy` |
 | stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0` | `stalwart_cli_image` in `group_vars/all.yml` |
 | stalwart-cli (your machine) | `1.0.12` | `mise.toml` |
@@ -385,6 +385,11 @@ In rough order of likelihood:
 - **TOTP login never completes, or "SESSION_SECRET not configured"** in
   Bulwark's logs: `bulwark_session_secret` is unset in `group_vars/all.yml`.
   Changing it invalidates every remembered session.
+- **A refresh logs the user out, with "OAuth token endpoint not found"** in
+  Bulwark's logs: its OAuth discovery rejected the private address that
+  `mail.<domain>` intentionally resolves to inside the Docker network.
+  `OAUTH_ALLOW_PRIVATE_ENDPOINTS=true` in the compose template permits this
+  trusted split-DNS route; it does not enable OAuth-only login.
 - **502 from Caddy**: the internal 8080 listener came up with TLS enabled,
   so it resets Caddy's plaintext request. `use_tls: false` on that listener
   in `stalwart_listeners` is what prevents it.

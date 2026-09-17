@@ -87,7 +87,7 @@
        "domainId": "#domain-primary",
        "roles": {"@type": a.role | default("User")},
        "permissions": {"@type": "Inherit"},
-       "locale": a.locale | default("en_US"),
+       "locale": (a.locale | default("en-US")) | replace("_", "-"),
        "encryptionAtRest": {"@type": "Disabled"},
        "credentials": {"0": {"@type": "Password", "secret": a.password, "allowedIps": {}}}}}} | to_json }}
 {% endfor %}

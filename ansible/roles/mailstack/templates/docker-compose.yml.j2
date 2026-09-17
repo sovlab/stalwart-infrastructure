@@ -58,11 +58,15 @@ services:
           - "{{ mail_hostname }}"
 
   bulwark:
-    image: ghcr.io/bulwarkmail/webmail:1.8
+    image: ghcr.io/bulwarkmail/webmail:1.9
     restart: unless-stopped
     environment:
       PORT: "{{ bulwark_internal_port }}"
       JMAP_SERVER_URL: "https://{{ mail_hostname }}"
+      # {{ mail_hostname }} resolves to Caddy's private address from this
+      # network by design. Permit OAuth discovery to follow that trusted,
+      # administrator-configured endpoint so TOTP access tokens can refresh.
+      OAUTH_ALLOW_PRIVATE_ENDPOINTS: "true"
       SESSION_SECRET: "{{ bulwark_session_secret }}"
     volumes:
       - "{{ data_dir }}/bulwark/admin:/app/data/admin"

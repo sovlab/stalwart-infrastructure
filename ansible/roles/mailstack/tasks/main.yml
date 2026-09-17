@@ -31,9 +31,6 @@
     - "{{ mailstack_dir }}/caddy-config"
     - "{{ data_dir }}/caddy/data"
     - "{{ data_dir }}/caddy/config"
-    - "{{ data_dir }}/bulwark/admin"
-    - "{{ data_dir }}/bulwark/admin-state"
-    - "{{ data_dir }}/bulwark/settings"
 
 # Stalwart's own two directories are created separately because the
 # container runs as an unprivileged user (uid 2000) and has to be able to
@@ -51,6 +48,22 @@
   loop:
     - "{{ data_dir }}/stalwart/etc"
     - "{{ data_dir }}/stalwart/data"
+
+# Same reasoning as Stalwart's directories above: the bulwark image runs
+# as uid 1001, and a root:root bind mount leaves it unable to write its
+# own audit log or persist admin-configured settings (including the
+# OAuth client Bulwark's own "Auto-configure OAuth" admin action creates).
+- name: Create Bulwark's directories, owned by the container's uid
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+    owner: "1001"
+    group: "1001"
+  loop:
+    - "{{ data_dir }}/bulwark/admin"
+    - "{{ data_dir }}/bulwark/admin-state"
+    - "{{ data_dir }}/bulwark/settings"
 
 - name: Render Stalwart's data store configuration
   ansible.builtin.template:

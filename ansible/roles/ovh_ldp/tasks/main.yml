@@ -1,0 +1,138 @@
+---
+# Tear down first so changing ovh_ldp_enabled back to false actually stops
+# egress. Keep the state directory: its journal cursor prevents a re-enabled
+# collector from replaying the entire retained journal.
+- name: Check for an existing OVH LDP deployment
+  ansible.builtin.stat:
+    path: "{{ ovh_ldp_dir }}/docker-compose.yml"
+  register: ovh_ldp_compose
+  when: not (ovh_ldp_enabled | bool)
+
+- name: Disable the OVH LDP collector
+  when:
+    - not (ovh_ldp_enabled | bool)
+    - ovh_ldp_compose.stat.exists | default(false)
+  block:
+    - name: Stop the OVH LDP collector
+      ansible.builtin.command:
+        cmd: docker compose down --remove-orphans
+        chdir: "{{ ovh_ldp_dir }}"
+      register: ovh_ldp_down
+      changed_when: >-
+        'Stopped' in ovh_ldp_down.stderr or 'Removed' in ovh_ldp_down.stderr
+
+    - name: Remove rendered OVH LDP configuration and credentials
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ovh_ldp_dir }}/.env"
+        - "{{ ovh_ldp_dir }}/vector.yaml"
+        - "{{ ovh_ldp_dir }}/docker-compose.yml"
+
+- name: Ensure the journald drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+  when: ovh_ldp_enabled | bool
+
+- name: Configure bounded persistent journal storage for LDP forwarding
+  ansible.builtin.template:
+    src: journald-ovh-ldp.conf.j2
+    dest: /etc/systemd/journald.conf.d/50-ovh-ldp.conf
+    mode: "0644"
+  when: ovh_ldp_enabled | bool
+  notify: Restart systemd-journald
+
+- name: Remove the OVH LDP journald policy when forwarding is disabled
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d/50-ovh-ldp.conf
+    state: absent
+  when: not (ovh_ldp_enabled | bool)
+  notify: Restart systemd-journald
+
+- name: Configure the OVH LDP collector
+  when: ovh_ldp_enabled | bool
+  block:
+    - name: Validate required OVH LDP settings and credentials
+      ansible.builtin.assert:
+        that:
+          - ovh_ldp_cluster | length > 0
+          - "'://' not in ovh_ldp_cluster"
+          - ovh_ldp_stream_token | length > 0
+          - ovh_ldp_iam_username | length > 0
+          - ovh_ldp_iam_token | length > 0
+          - ovh_ldp_vector_buffer_bytes | int >= 268435488
+        fail_msg: >-
+          OVH LDP forwarding is enabled but its configuration is incomplete.
+          Set ovh_ldp_cluster and ovh_ldp_iam_username in group_vars/all.yml,
+          and OVH_LDP_STREAM_TOKEN and OVH_LDP_IAM_TOKEN in .env. The cluster
+          is a hostname without https://. Vector disk buffers must be at least
+          268435488 bytes.
+
+    - name: Read the host systemd-journal group
+      ansible.builtin.getent:
+        database: group
+        key: systemd-journal
+
+    - name: Create the persistent journal directory
+      ansible.builtin.file:
+        path: /var/log/journal
+        state: directory
+        owner: root
+        group: systemd-journal
+        mode: "2755"
+      notify: Restart systemd-journald
+
+    - name: Apply journald changes before validating Vector access
+      ansible.builtin.meta: flush_handlers
+
+    - name: Create OVH LDP collector directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ ovh_ldp_dir }}", owner: root, group: root, mode: "0755" }
+        - { path: "{{ ovh_ldp_dir }}/data", owner: "{{ ovh_ldp_vector_uid }}", group: "{{ ovh_ldp_vector_gid }}", mode: "0750" }
+
+    - name: Render Vector configuration
+      ansible.builtin.template:
+        src: vector.yaml.j2
+        dest: "{{ ovh_ldp_dir }}/vector.yaml"
+        mode: "0644"
+
+    - name: Render OVH LDP collector compose file
+      ansible.builtin.template:
+        src: docker-compose.yml.j2
+        dest: "{{ ovh_ldp_dir }}/docker-compose.yml"
+        mode: "0644"
+
+    - name: Write Vector's OVH LDP credentials
+      ansible.builtin.copy:
+        content: |
+          OVH_LDP_HOST={{ ovh_ldp_host }}
+          OVH_LDP_STREAM_TOKEN={{ ovh_ldp_stream_token }}
+          OVH_LDP_IAM_USERNAME={{ ovh_ldp_iam_username }}
+          OVH_LDP_IAM_TOKEN={{ ovh_ldp_iam_token }}
+        dest: "{{ ovh_ldp_dir }}/.env"
+        mode: "0600"
+      no_log: true
+
+    - name: Validate Vector configuration
+      ansible.builtin.command:
+        cmd: docker compose run --rm --no-deps vector validate /etc/vector/vector.yaml
+        chdir: "{{ ovh_ldp_dir }}"
+      changed_when: false
+
+    - name: Deploy the OVH LDP collector
+      ansible.builtin.command:
+        cmd: docker compose up -d --remove-orphans
+        chdir: "{{ ovh_ldp_dir }}"
+      register: ovh_ldp_up
+      changed_when: >-
+        'Started' in ovh_ldp_up.stderr or 'Created' in ovh_ldp_up.stderr
+        or 'Recreated' in ovh_ldp_up.stderr

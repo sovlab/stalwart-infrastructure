@@ -53,7 +53,8 @@ Automatic:
 - Stalwart's TLS certificate, issued and renewed over ACME DNS-01.
 - DKIM key rotation every 90 days, with the new selector published to
   Cloudflare by Stalwart itself.
-- Docker log rotation, 10 MB per file, 3 files per container.
+- Docker log rotation, 10 MB per file and 3 files per container by default;
+  OVH LDP deployments instead use the bounded persistent system journal.
 
 Not automatic, and yours to do:
 
@@ -75,6 +76,7 @@ Not automatic, and yours to do:
 | Caddy | `caddy:2-alpine` (built locally) | `ansible/roles/mailstack/files/Dockerfile.caddy` |
 | stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0` | `stalwart_cli_image` in `group_vars/all.yml` |
 | stalwart-cli (your machine) | `1.0.12` | `mise.toml` |
+| Vector (optional OVH LDP) | `timberio/vector:0.58.0-debian` | `ovh_ldp_vector_image` role default |
 
 All of these are series tags, not digests, so the upstream tag moves as
 patch releases land. That means two different update paths.

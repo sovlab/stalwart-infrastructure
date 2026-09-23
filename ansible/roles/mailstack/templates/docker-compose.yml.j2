@@ -10,6 +10,20 @@ services:
   stalwart:
     image: stalwartlabs/stalwart:v0.16
     restart: unless-stopped
+    # Keep this explicit even though it matches Docker's daemon default.
+    # Changing the daemon default affects only newly-created containers;
+    # changing this Compose field makes `up` recreate existing ones too.
+    logging:
+{% if ovh_ldp_enabled | default(false) | bool %}
+      driver: journald
+      options:
+        tag: "{% raw %}{{.Name}}{% endraw %}"
+{% else %}
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+{% endif %}
     # 8080 (plain HTTP JMAP/WebUI/admin) is reached by Caddy over the
     # internal network only - never published to the host. 25/465/993 are
     # Stalwart's own raw SMTP/IMAP TLS listeners, published directly since
@@ -38,6 +52,17 @@ services:
     build:
       context: "{{ mailstack_dir }}/caddy-config"
     restart: unless-stopped
+    logging:
+{% if ovh_ldp_enabled | default(false) | bool %}
+      driver: journald
+      options:
+        tag: "{% raw %}{{.Name}}{% endraw %}"
+{% else %}
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+{% endif %}
     ports:
       - "80:80"
       - "443:443"
@@ -60,6 +85,17 @@ services:
   bulwark:
     image: ghcr.io/bulwarkmail/webmail:1.9
     restart: unless-stopped
+    logging:
+{% if ovh_ldp_enabled | default(false) | bool %}
+      driver: journald
+      options:
+        tag: "{% raw %}{{.Name}}{% endraw %}"
+{% else %}
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+{% endif %}
     environment:
       PORT: "{{ bulwark_internal_port }}"
       JMAP_SERVER_URL: "https://{{ mail_hostname }}"

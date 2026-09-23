@@ -36,6 +36,8 @@ Working today:
 - Docker Engine
 - A firewall (ufw) that actually applies to Docker-published ports, which
   vanilla ufw does not (see [Docker doesn't get to bypass the firewall](#security-model) below)
+- Optional [OVH Logs Data Platform forwarding](OVH.md) for host and container
+  logs using an unprivileged Vector collector
 - The mail stack: Stalwart, Caddy, and Bulwark as one Docker Compose
   project, with Stalwart issuing and renewing its own TLS certificate
   over ACME
@@ -127,6 +129,7 @@ ansible/
     docker/                 # Docker Engine + compose plugin
     firewall/               # ufw + ufw-docker
     mailstack/              # Stalwart + Caddy + Bulwark
+    ovh_ldp/                # optional journald -> OVH LDP Vector collector
 tools/                    # standalone troubleshooting scripts, see tools/README.md
 ```
 
@@ -171,6 +174,9 @@ ACME DNS-01 challenge when renewing its own certificate. Scope it to
 
 `mise` loads this automatically whenever you're inside the project
 directory (see `mise.toml`).
+
+For optional OVH log forwarding, see [OVH.md](OVH.md) for the additional
+credentials and configuration.
 
 ### 4. Edit your configuration
 
@@ -270,6 +276,10 @@ three lines in `stalwart_accounts`.
 
 Removing an entry from `stalwart_accounts` does **not** delete the account.
 Upserts never destroy. Delete accounts in the WebUI.
+
+## Optional OVH Logs Data Platform forwarding
+
+See [OVH.md](OVH.md) for setup, configuration options, and Graylog queries.
 
 ## Maintenance
 

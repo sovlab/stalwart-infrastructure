@@ -12,6 +12,30 @@ webmail_hostname: webmail.CHANGEME_DOMAIN.example # Bulwark
 
 timezone: UTC
 
+# --- optional OVH Logs Data Platform ---------------------------------------
+# Enable this only for deployments that should forward their host and
+# container journal to OVH LDP. Enabling it switches Docker containers from
+# json-file logging to journald, configures a bounded persistent host journal,
+# and runs an unprivileged Vector collector. Vector itself keeps using Docker's
+# local driver so its diagnostics cannot loop back into its own journal source.
+#
+# Create an LDP data stream, copy its write token to OVH_LDP_STREAM_TOKEN in
+# .env, and create an IAM token for the OpenSearch ingestion endpoint as
+# OVH_LDP_IAM_TOKEN. The access point is a hostname only (no scheme or port),
+# e.g. gra1.logs.ovh.com.
+ovh_ldp_enabled: false
+ovh_ldp_cluster: CHANGEME_LDP_CLUSTER.logs.ovh.com
+ovh_ldp_host: "{{ inventory_hostname }}"
+ovh_ldp_iam_username: pat_jwt_mailserver
+
+# Local retention and outage buffer. The journal is shared by all host and
+# container logs; Vector's separate disk buffer holds accepted events while
+# LDP is unavailable. Vector requires a disk buffer of at least ~256 MiB.
+ovh_ldp_journal_max_use: 512M
+ovh_ldp_journal_keep_free: 1G
+ovh_ldp_journal_retention: 7day
+ovh_ldp_vector_buffer_bytes: 536870912
+
 # --- storage --------------------------------------------------------------
 # A plain directory on the root filesystem: no second block volume, nothing
 # to format or mount. Stalwart's local footprint here is metadata, indexes

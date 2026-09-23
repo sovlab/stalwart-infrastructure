@@ -1,0 +1,34 @@
+# Managed by Ansible - roles/ovh_ldp. Do not edit on the host.
+name: ovh-ldp
+
+services:
+  vector:
+    image: "{{ ovh_ldp_vector_image }}"
+    restart: unless-stopped
+    user: "{{ ovh_ldp_vector_uid }}:{{ ovh_ldp_vector_gid }}"
+    group_add:
+      - "{{ ansible_facts.getent_group['systemd-journal'][1] }}"
+    env_file:
+      - .env
+    # Vector 0.57+ requires this to resolve the IAM credentials in vector.yaml.
+    environment:
+      VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION: "true"
+    command: ["--config", "/etc/vector/vector.yaml"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - ./vector.yaml:/etc/vector/vector.yaml:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /var/log/journal:/var/log/journal:ro
+      - ./data:/var/lib/vector
+    # Do not feed Vector's own diagnostics back into the journal it reads.
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"

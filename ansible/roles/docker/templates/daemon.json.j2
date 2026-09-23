@@ -1,0 +1,17 @@
+{
+{% if ovh_ldp_enabled | default(false) | bool %}
+  "log-driver": "journald",
+  "log-opts": {
+    "tag": "{% raw %}{{.Name}}{% endraw %}"
+  },
+{% else %}
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+{% endif %}
+  "ipv6": true,
+  "fixed-cidr-v6": "fd00:dead:beef::/64",
+  "ip6tables": true
+}

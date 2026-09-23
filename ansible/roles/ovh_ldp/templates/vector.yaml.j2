@@ -1,0 +1,56 @@
+# Managed by Ansible - roles/ovh_ldp.
+data_dir: /var/lib/vector
+
+sources:
+  host_journal:
+    type: journald
+    # systemd 250-257 cannot read earlier boots through Vector's journald source.
+    current_boot_only: true
+
+transforms:
+  ldp_fields:
+    type: remap
+    inputs: [host_journal]
+    source: |-
+      ."X-OVH-TOKEN" = get_env_var!("OVH_LDP_STREAM_TOKEN")
+      .host = get_env_var!("OVH_LDP_HOST")
+      raw = to_string(.message) ?? "-"
+      .short_message = raw
+      # Docker and some applications write logfmt into the journal MESSAGE.
+      # Keep MESSAGE intact and expose the embedded severity separately from
+      # journald's PRIORITY (which can be informational for an error line).
+      if contains(raw, "level=") {
+        fields, parse_error = parse_key_value(raw)
+        if parse_error == null {
+          level = to_string(fields.level) ?? ""
+          if level != "" { .app_level = downcase(level) }
+          if is_string(fields.msg) { .app_message = fields.msg }
+          if is_string(fields.error) { .app_error = fields.error }
+          if is_string(fields."client-addr") { .app_client_addr = fields."client-addr" }
+          if is_string(fields."dns-server") { .app_dns_server = fields."dns-server" }
+          if is_string(fields.question) { .app_question = fields.question }
+        }
+      }
+
+sinks:
+  ovh_ldp:
+    type: elasticsearch
+    inputs: [ldp_fields]
+    endpoints:
+      - "https://{{ ovh_ldp_cluster }}:9200"
+    mode: bulk
+    api_version: v7
+    compression: gzip
+    healthcheck: true
+    bulk:
+      index: ldp-logs
+    auth:
+      strategy: basic
+      user: "${OVH_LDP_IAM_USERNAME}"
+      password: "${OVH_LDP_IAM_TOKEN}"
+    acknowledgements:
+      enabled: true
+    buffer:
+      type: disk
+      max_size: {{ ovh_ldp_vector_buffer_bytes }}
+      when_full: block

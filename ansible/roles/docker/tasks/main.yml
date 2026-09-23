@@ -46,20 +46,10 @@
     groups: docker
     append: true
 
-- name: Configure Docker daemon (log rotation, IPv6)
-  ansible.builtin.copy:
+- name: Configure Docker daemon (logging, IPv6)
+  ansible.builtin.template:
+    src: daemon.json.j2
     dest: /etc/docker/daemon.json
-    content: |
-      {
-        "log-driver": "json-file",
-        "log-opts": {
-          "max-size": "10m",
-          "max-file": "3"
-        },
-        "ipv6": true,
-        "fixed-cidr-v6": "fd00:dead:beef::/64",
-        "ip6tables": true
-      }
     mode: "0644"
   notify: Restart docker
 

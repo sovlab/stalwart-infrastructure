@@ -1,0 +1,18 @@
+---
+# Disabled everywhere unless a deployment explicitly opts in.
+ovh_ldp_enabled: false
+ovh_ldp_dir: "{{ data_dir }}/ovh-ldp"
+ovh_ldp_vector_image: timberio/vector:0.58.0-debian
+ovh_ldp_vector_uid: "1000"
+ovh_ldp_vector_gid: "1000"
+ovh_ldp_vector_buffer_bytes: 536870912
+ovh_ldp_journal_max_use: 512M
+ovh_ldp_journal_keep_free: 1G
+ovh_ldp_journal_retention: 7day
+
+# Set these in group_vars/all.yml when enabled. Keep the two tokens in .env.
+ovh_ldp_cluster: ""
+ovh_ldp_host: "{{ inventory_hostname }}"
+ovh_ldp_iam_username: pat_jwt_mailserver
+ovh_ldp_stream_token: "{{ lookup('ansible.builtin.env', 'OVH_LDP_STREAM_TOKEN') }}"
+ovh_ldp_iam_token: "{{ lookup('ansible.builtin.env', 'OVH_LDP_IAM_TOKEN') }}"

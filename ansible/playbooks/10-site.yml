@@ -14,3 +14,6 @@
     - docker
     - firewall
     - mailstack
+    # Always evaluated: when disabled, this role tears down a collector that
+    # may have been enabled by an earlier run.
+    - ovh_ldp

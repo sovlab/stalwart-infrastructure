@@ -83,7 +83,7 @@ services:
           - "{{ mail_hostname }}"
 
   bulwark:
-    image: ghcr.io/bulwarkmail/webmail:1.9
+    image: ghcr.io/bulwarkmail/webmail:1.11
     restart: unless-stopped
     logging:
 {% if ovh_ldp_enabled | default(false) | bool %}

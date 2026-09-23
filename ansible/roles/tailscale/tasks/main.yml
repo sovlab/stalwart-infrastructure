@@ -43,14 +43,30 @@
   changed_when: false
   failed_when: false
 
-- name: Join the tailnet
+# Only meaningful once already joined - a fresh node has no Self.Tags to
+# read yet, and the "Join the tailnet" task below covers that case anyway.
+- name: Read back the currently advertised tags
+  ansible.builtin.set_fact:
+    tailscale_current_tags: "{{ (ts_status.stdout | from_json).Self.Tags | default([]) }}"
+  when: ts_status.rc == 0 and ts_status.stdout | length > 0
+
+# tailscale_tags in group_vars is what the repo says this host should
+# advertise; tailscale_current_tags is what the host is actually advertising
+# right now. Re-running `tailscale up` is how you change advertised tags on
+# an already-joined node - it's not a one-time join step - so this has to
+# fire on tag drift too, not just "isn't up yet", or a tag added in the repo
+# never reaches a host that's already joined.
+- name: Join the tailnet, or update it if the advertised tags have drifted
   ansible.builtin.command: >
     tailscale up
     --authkey={{ tailscale_authkey }}
     --hostname={{ tailscale_hostname }}
     --advertise-tags={{ tailscale_tags | join(',') }}
     --accept-dns=true
-  when: ts_status.rc != 0 or '"BackendState":"Running"' not in ts_status.stdout
+  when: >
+    ts_status.rc != 0
+    or '"BackendState":"Running"' not in ts_status.stdout
+    or (tailscale_current_tags | default([]) | sort) != (tailscale_tags | sort)
   no_log: true
 
 - name: Read back the tailnet IPv4 address

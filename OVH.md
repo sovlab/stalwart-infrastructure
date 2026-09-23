@@ -65,24 +65,55 @@ logger -t ldp-test "OVH LDP forwarding test"
 
 Search the new Graylog stream for `SYSLOG_IDENTIFIER:ldp-test`.
 
-Vector parses logfmt lines such as Docker daemon messages containing
-`level=error msg="..."`. It preserves `message` and `short_message` and adds
-`app_level`, `app_message`, and available `app_error`/DNS fields. The journal's
-`PRIORITY` is separate; it can be informational even when the application
-writes `level=error`.
+### Unified fields
+
+Each container writes a different format: Caddy emits JSON, the Docker daemon
+emits logfmt, Stalwart emits plain text. Vector normalises all of them onto
+one set of fields before shipping, so a search does not have to know which
+producer it is looking at.
+
+| Field | Present for | Meaning |
+| --- | --- | --- |
+| `service` | everything | `caddy`, `stalwart`, `bulwark`, `vector`, or the unit's syslog identifier (`dockerd`, `sshd`, `systemd`) for host logs. |
+| `app_level` | everything | `error`, `warn`, `notice`, `info` or `debug`. Taken from the application's own level when it has one, otherwise derived from journald's `PRIORITY`. |
+| `message` / `short_message` | everything | One readable line. For structured producers this is the message plus request context, not the raw payload. |
+| `full_message` | JSON and logfmt lines | The untouched original payload. |
+| `logger` | JSON lines | Subsystem, e.g. `http.handlers.reverse_proxy`. |
+| `app_error` | JSON and logfmt lines | The `error` or `err` field. |
+| `client_ip`, `http_method`, `http_host`, `http_path`, `http_proto` | Caddy | Request context. |
+| `http_status`, `http_bytes`, `http_duration_ms` | Caddy | Numeric; absent rather than zero when the producer did not report them. |
+| `upstream` | Caddy | Proxy target, e.g. `stalwart:8080`. |
+| `app_client_addr`, `app_dns_server`, `app_question` | Docker daemon | Resolver diagnostics. |
+
+The readable form of the severity is `app_level`, not `level`: GELF reserves
+`level` for the numeric syslog value, and a string under that name conflicts
+with the index mapping.
+
+Structured payloads are read for named fields only, never flattened wholesale.
+Caddy's JSON carries the entire request header map; flattening it would add a
+Graylog field per header ever seen and walk the stream towards LDP's
+per-stream field limit for no search value. The headers stay searchable as
+text inside `full_message`.
 
 | Graylog query | Finds |
 | --- | --- |
-| `app_level:error` | Newly ingested logfmt errors. |
-| `SYSLOG_IDENTIFIER:dockerd AND app_level:error` | Docker daemon errors, including resolver failures. |
-| `app_error:"dns: overflowing header size"` | The parsed DNS error in the example. |
-| `CONTAINER_NAME:mailstack-stalwart-1 AND message:(error OR ERROR)` | Plain-text Stalwart messages mentioning errors. |
+| `app_level:(error OR warn)` | Everything unhealthy, across all containers. |
+| `service:stalwart AND app_level:error` | Stalwart errors only. |
+| `service:caddy AND http_status:[500 TO 599]` | Proxy and upstream failures. |
+| `http_path:/jmap*` | JMAP traffic, by request path. |
+| `client_ip:203.0.113.7` | One client, across Caddy and the mail containers. |
+| `http_duration_ms:>1000` | Requests slower than a second. |
+| `service:dockerd AND app_level:error` | Docker daemon errors, including resolver failures. |
+| `full_message:"context canceled"` | Text that only exists in the raw payload. |
 
-`CONTAINER_NAME` identifies container output. Docker daemon messages have
-`SYSLOG_IDENTIFIER:dockerd` and no `CONTAINER_NAME`. Mail containers that
-write plain text can be searched by `message`; `app_level` is present only
-when Vector parses a logfmt `level=` field. Parsing affects newly ingested
-messages after redeployment, not entries already in Graylog.
+Stalwart's stdout tracer is plain text, so it gets `service` and `app_level`
+but no structured fields. Parsing applies to newly ingested messages after
+redeployment, not to entries already in Graylog.
+
+Known-benign noise worth a Graylog stream rule rather than a search: Caddy
+logs `aborting with incomplete response` with `error: reading: context
+canceled` every time a browser closes a JMAP EventSource stream, which is
+ordinary client behaviour on `/jmap/eventsource/`.
 
 ## Disable forwarding
 

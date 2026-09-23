@@ -8,27 +8,154 @@ sources:
     current_boot_only: true
 
 transforms:
+  # Every producer on this host writes a different format: Caddy emits JSON,
+  # the Docker daemon emits logfmt, Stalwart emits plain text. This normalises
+  # all three onto one set of Graylog fields so a search does not have to know
+  # which container it is looking at.
+  #
+  # Structured payloads are read for named fields only, never flattened
+  # wholesale. Caddy's JSON carries the entire request header map; flattening
+  # it would add a Graylog field per header ever seen and walk the stream into
+  # LDP's per-stream field limit for no search value.
   ldp_fields:
     type: remap
     inputs: [host_journal]
     source: |-
       ."X-OVH-TOKEN" = get_env_var!("OVH_LDP_STREAM_TOKEN")
       .host = get_env_var!("OVH_LDP_HOST")
+
       raw = to_string(.message) ?? "-"
       .short_message = raw
-      # Docker and some applications write logfmt into the journal MESSAGE.
-      # Keep MESSAGE intact and expose the embedded severity separately from
-      # journald's PRIORITY (which can be informational for an error line).
-      if contains(raw, "level=") {
-        fields, parse_error = parse_key_value(raw)
-        if parse_error == null {
-          level = to_string(fields.level) ?? ""
-          if level != "" { .app_level = downcase(level) }
-          if is_string(fields.msg) { .app_message = fields.msg }
-          if is_string(fields.error) { .app_error = fields.error }
-          if is_string(fields."client-addr") { .app_client_addr = fields."client-addr" }
-          if is_string(fields."dns-server") { .app_dns_server = fields."dns-server" }
-          if is_string(fields.question) { .app_question = fields.question }
+
+      # Container name without the compose project prefix and replica suffix,
+      # falling back to the unit's syslog identifier for host units such as
+      # dockerd and sshd.
+      container = to_string(.CONTAINER_NAME) ?? ""
+      if container != "" {
+        service = replace(container, r'^(mailstack|ovh-ldp)-', "")
+        .service = replace(service, r'-\d+$', "")
+      } else {
+        .service = to_string(.SYSLOG_IDENTIFIER) ?? "unknown"
+      }
+
+      # Baseline severity from journald, overridden below by whatever the
+      # application itself claims. GELF reserves `level` for the numeric
+      # syslog value, so the readable form lives in `app_level`: a string
+      # under `level` would collide with the index mapping and the document
+      # would be rejected.
+      priority = to_int(.PRIORITY) ?? 6
+      if priority <= 3 {
+        .app_level = "error"
+      } else if priority == 4 {
+        .app_level = "warn"
+      } else if priority == 5 {
+        .app_level = "notice"
+      } else if priority == 6 {
+        .app_level = "info"
+      } else {
+        .app_level = "debug"
+      }
+
+      fields = {}
+      if starts_with(raw, "{") {
+        decoded, decode_error = parse_json(raw)
+        if decode_error == null {
+          coerced, coerce_error = object(decoded)
+          if coerce_error == null { fields = coerced }
+        }
+      } else if contains(raw, "level=") {
+        decoded, decode_error = parse_key_value(raw)
+        if decode_error == null { fields = decoded }
+      }
+
+      if fields != {} {
+        # A word for Caddy and logfmt, a number for anything using pino or
+        # bunyan conventions.
+        if is_string(fields.level) {
+          .app_level = downcase(string!(fields.level))
+        } else if is_integer(fields.level) {
+          numeric = int!(fields.level)
+          if numeric >= 50 {
+            .app_level = "error"
+          } else if numeric >= 40 {
+            .app_level = "warn"
+          } else if numeric >= 30 {
+            .app_level = "info"
+          } else {
+            .app_level = "debug"
+          }
+        }
+        if .app_level == "warning" { .app_level = "warn" }
+        if .app_level == "err" { .app_level = "error" }
+        if .app_level == "fatal" { .app_level = "error" }
+
+        summary = ""
+        if is_string(fields.msg) { summary = string!(fields.msg) }
+        if summary == "" && is_string(fields.message) { summary = string!(fields.message) }
+
+        if is_string(fields.logger) { .logger = fields.logger }
+        if is_string(fields.error) { .app_error = fields.error }
+        if is_string(fields.err) { .app_error = fields.err }
+        if is_string(fields.upstream) { .upstream = fields.upstream }
+
+        # Docker daemon resolver fields, kept under their established names.
+        if is_string(fields."client-addr") { .app_client_addr = fields."client-addr" }
+        if is_string(fields."dns-server") { .app_dns_server = fields."dns-server" }
+        if is_string(fields.question) { .app_question = fields.question }
+
+        # Caddy request context. Everything else under `request` - above all
+        # the header map - is deliberately left behind.
+        request = object(fields.request) ?? {}
+        if is_string(request.client_ip) { .client_ip = request.client_ip }
+        if is_string(request.method) { .http_method = request.method }
+        if is_string(request.host) { .http_host = request.host }
+        if is_string(request.uri) { .http_path = request.uri }
+        if is_string(request.proto) { .http_proto = request.proto }
+
+        # LDP types a new field from the first value it sees, so these are
+        # coerced rather than passed through as whatever JSON gave us. The
+        # null guards matter: to_int(null) is 0, not an error, which would
+        # otherwise stamp http_status 0 on every non-HTTP line in the stream.
+        if fields.status != null {
+          status, status_error = to_int(fields.status)
+          if status_error == null { .http_status = status }
+        }
+        if fields.size != null {
+          size, size_error = to_int(fields.size)
+          if size_error == null { .http_bytes = size }
+        }
+        if fields.duration != null {
+          elapsed, elapsed_error = to_float(fields.duration)
+          if elapsed_error == null { .http_duration_ms = round(elapsed * 1000.0, 3) }
+        }
+
+        if summary != "" {
+          line = summary
+          method = to_string(request.method) ?? ""
+          if method != "" {
+            line = line + ": " + method + " " + (to_string(request.host) ?? "") + (to_string(request.uri) ?? "")
+          }
+          status_text = to_string(fields.status) ?? ""
+          if status_text != "" { line = line + " " + status_text }
+          error_text = to_string(fields.error) ?? ""
+          if error_text != "" { line = line + " (" + error_text + ")" }
+          # Graylog's message column shows a sentence rather than a wall of
+          # JSON; the untouched payload stays searchable in full_message.
+          .message = line
+          .short_message = line
+          .full_message = raw
+        }
+      } else {
+        # Plain text, Stalwart included. Take a severity only when it is the
+        # first or second token, so the word "error" inside a message body
+        # does not relabel the event.
+        leading, leading_error = parse_regex(raw, r'^\S*\s*(?P<level>TRACE|DEBUG|INFO|NOTICE|WARN|WARNING|ERROR|CRITICAL|FATAL)\b')
+        if leading_error == null {
+          level = downcase(string!(leading.level))
+          if level == "warning" { level = "warn" }
+          if level == "critical" || level == "fatal" { level = "error" }
+          if level == "trace" { level = "debug" }
+          .app_level = level
         }
       }
 

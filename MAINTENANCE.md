@@ -729,6 +729,95 @@ sudo docker run --rm --network mailstack_internal \
   ghcr.io/stalwartlabs/cli:1.0 query BlockedIp
 ```
 
+## Changing the primary domain
+
+Moving the server's identity from `old.example` to `new.example`, with both
+staying as mail domains in Stalwart. Mailboxes and addresses do not change.
+What changes is the hostname clients and other servers see
+(`mail.new.example`, `webmail.new.example`) and the default domain Stalwart
+uses for bare-username logins and for the reports it sends.
+
+### Ahead of time, in DNS
+
+None of this changes anything until the playbook runs, so it can be done
+days before.
+
+- `mail.new.example` A and AAAA to the server's addresses, **DNS only**
+  (grey cloud): Cloudflare's proxy does not carry 25, 465 or 993.
+- `webmail.new.example` A and AAAA, or a CNAME, the same way the current
+  webmail record is set up. If it is proxied (orange cloud), the zone's
+  SSL/TLS mode has to be **Full (strict)**; Flexible makes Cloudflare talk
+  plain HTTP to Caddy, which redirects to HTTPS, in a loop.
+- `mail.new.example` TXT `v=spf1 a -all`. Receivers check SPF on the HELO
+  name too, and that becomes `mail.new.example`.
+- If the zone is DNSSEC-signed, a TLSA record at
+  `_25._tcp.mail.new.example`. DANE-checking senders look it up as soon as
+  MX points there: none means opportunistic TLS, a wrong one means they
+  refuse to deliver. Publish `2 1 1` records (the issuing CA's key) for the
+  Let's Encrypt intermediates rather than a `3 1 1` for the certificate's
+  own key, which changes on every renewal unless something rewrites it.
+  Compute the current one from what Stalwart serves:
+
+  ```bash
+  echo | openssl s_client -connect mail.old.example:465 \
+      -servername mail.new.example -showcerts 2>/dev/null \
+    | awk '/BEGIN CERT/{n++} n==2' \
+    | openssl x509 -noout -pubkey | openssl pkey -pubin -outform DER \
+    | openssl dgst -sha256
+  ```
+
+  Let's Encrypt rotates among several intermediates, so add a `2 1 1` for
+  each one in use. The `_443` TLSA records Stalwart already publishes in
+  the zone list them.
+- Leave every record for the old hostnames in place. They stay in service
+  as aliases.
+
+### The switch
+
+1. In `all.yml`: set `domain`, `mail_hostname` and `webmail_hostname` to
+   the new values. Pin `stalwart_admin_domain` and
+   `stalwart_dns_server_description` to the old domain, and list the old
+   hostnames in `mail_hostname_aliases` and `webmail_hostname_aliases`.
+   Skipping the pins breaks the run: the playbook would log in as an admin
+   address that does not exist, and create a second DNS provider instead of
+   updating its own.
+2. Run the playbook. It changes Stalwart's `defaultHostname`, which is the
+   SMTP greeting and the target of the MX, SRV, autoconfig and MTA-STS
+   records Stalwart publishes for every domain whose DNS it manages. Caddy
+   gets certificates for the new names, Bulwark is recreated pointing at
+   the new mail hostname.
+3. Set the PTR for both IPv4 and IPv6 to `mail.new.example` in the VPS
+   provider's panel. It must match the SMTP greeting, and the provider
+   usually checks that the name resolves back first.
+4. In the admin console, make `new.example` the default domain. The plan
+   only sets this at provisioning, so the playbook never reverts it.
+5. In Bulwark's admin dashboard, run Auto-configure OAuth again, so the
+   client is registered for the new webmail hostname.
+
+### Users
+
+Everyone signs in again to webmail and to any OAuth mail client: Stalwart's
+OAuth issuer follows the hostname. Mail clients using a password keep
+working on the old hostname through the alias. New setups through
+autoconfig get the new one.
+
+### Afterwards
+
+```bash
+dig +short MX example.com                 # each managed domain: mail.new.example
+curl -s https://mta-sts.example.com/.well-known/mta-sts.txt   # mx: mail.new.example
+dig +short TLSA _25._tcp.mail.new.example
+dig +short -x <ipv4>; dig +short -x <ipv6>
+```
+
+Domains whose DNS Stalwart does not manage keep their MX until someone
+changes it by hand. Then send a message to an outside mailbox and check the
+headers for `spf=pass`, `dkim=pass` and `dmarc=pass`.
+
+Keep the aliases, and their DNS, TLSA and certificates, until no client
+still uses the old hostnames. There is no rush: an alias costs one
+certificate renewal per name.
+
 ## Adding a mail domain
 
 Domains are created in the admin console, which also publishes their DNS

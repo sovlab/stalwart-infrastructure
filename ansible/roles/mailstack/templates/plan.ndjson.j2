@@ -47,7 +47,7 @@
 {{ {"@type": "upsert", "object": "DnsServer", "matchOn": ["description"], "value": {
      "dnsserver-cf": {
        "@type": "Cloudflare",
-       "description": "cloudflare " ~ domain,
+       "description": stalwart_dns_server_description,
        "secret": {"@type": "Value", "secret": cloudflare_api_token},
        "ttl": 300000,
        "timeout": 30000,

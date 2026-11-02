@@ -737,6 +737,27 @@ What changes is the hostname clients and other servers see
 (`mail.new.example`, `webmail.new.example`) and the default domain Stalwart
 uses for bare-username logins and for the reports it sends.
 
+### First, the Enterprise licence
+
+Stalwart matches the Enterprise licence against the domain of its
+hostname, not against the default domain. The moment the server reloads
+with `mail.new.example`, it treats a licence issued for `old.example` as
+invalid, tries to renew it for `new.example`, gets `Unauthorized` from
+license.stalw.art, and the console blocks every Enterprise feature
+(tenants included) until a licence for the new domain is installed. Mail
+keeps flowing; administration does not.
+
+So have the licence moved to `new.example` on license.stalw.art before the
+switch, and install it as part of it. After installing a new licence,
+restart the container rather than only reloading: loaded by a reload, the
+licence came up without the metrics store, and the dashboard logged
+`store.not-configured` for every graph until a restart. The startup log
+should say:
+
+```
+Stalwart Enterprise Edition license key is valid, domain = "new.example"
+```
+
 ### Ahead of time, in DNS
 
 None of this changes anything until the playbook runs, so it can be done
@@ -769,6 +790,12 @@ days before.
   Let's Encrypt rotates among several intermediates, so add a `2 1 1` for
   each one in use. The `_443` TLSA records Stalwart already publishes in
   the zone list them.
+
+  This record only has to be right for the gap before Stalwart republishes.
+  If the zone has TLSA publishing enabled, the republish below replaces it
+  with Stalwart's own set (a `3 1 1` for the current key plus `2 1 1`s),
+  and adds `_465` and `_993` records, all kept up to date on renewal from
+  then on.
 - Leave every record for the old hostnames in place. They stay in service
   as aliases.
 
@@ -781,18 +808,46 @@ days before.
    Skipping the pins breaks the run: the playbook would log in as an admin
    address that does not exist, and create a second DNS provider instead of
    updating its own.
-2. Run the playbook. It changes Stalwart's `defaultHostname`, which is the
-   SMTP greeting and the target of the MX, SRV, autoconfig and MTA-STS
-   records Stalwart publishes for every domain whose DNS it manages. Caddy
-   gets certificates for the new names, Bulwark is recreated pointing at
-   the new mail hostname.
-3. Set the PTR for both IPv4 and IPv6 to `mail.new.example` in the VPS
+2. Run the playbook. It changes Stalwart's `defaultHostname` and reloads
+   the settings, which moves the SMTP greeting and the OAuth issuer to the
+   new name. Caddy gets certificates for the new names, Bulwark is
+   recreated pointing at the new mail hostname. Stalwart is not restarted.
+   If the reload reports warnings, the playbook prints them: a licence
+   warning here means the previous section was skipped.
+3. Install the new licence and restart the container (see above).
+4. Republish DNS. Stalwart does not rewrite the records it manages when the
+   hostname changes; MX, SRV, autoconfig, MTA-STS and TLSA keep pointing at
+   the old name until a DNS management task runs for each domain. From
+   `/data/mailstack`, with the domain ids from `query Domain`:
+
+   ```bash
+   for id in <domain ids>; do
+     sudo docker run --rm --env-file .cli.env <stalwart_cli_image> \
+       create Task/DnsManagement --field domainId=$id \
+       --field 'updateRecords={"mx":true,"srv":true,"mtaSts":true,"autoConfig":true,"autoConfigLegacy":true,"autoDiscover":true,"tlsa":true,"spf":true}'
+   done
+   ```
+
+   The tasks run within a minute and disappear when they succeed; the log
+   shows a `dns.record-created` line per record. Run them only after the
+   reload, since they publish whatever hostname the running server has.
+5. Set the PTR for both IPv4 and IPv6 to `mail.new.example` in the VPS
    provider's panel. It must match the SMTP greeting, and the provider
-   usually checks that the name resolves back first.
-4. In the admin console, make `new.example` the default domain. The plan
-   only sets this at provisioning, so the playbook never reverts it.
-5. In Bulwark's admin dashboard, run Auto-configure OAuth again, so the
-   client is registered for the new webmail hostname.
+   usually checks that the name resolves back first. OVH shows the new
+   value at once but can take an hour to serve it.
+6. Make `new.example` the default domain, then reload:
+
+   ```bash
+   C="sudo docker run --rm --env-file .cli.env <stalwart_cli_image>"
+   $C query Domain --json                     # find new.example's id
+   $C update SystemSettings singleton --field defaultDomainId=<id>
+   $C create Action/ReloadSettings --json '{}'
+   ```
+
+   The plan only sets this at provisioning, so the playbook never reverts
+   it.
+7. In Bulwark's admin dashboard, run Auto-configure OAuth again, so the
+   client is registered against the new issuer and webmail hostname.
 
 ### Users
 

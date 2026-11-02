@@ -370,6 +370,31 @@
   register: stalwart_reapply
   changed_when: true
 
+# apply stores the new settings but the running server keeps the old ones
+# until it reloads. A changed defaultHostname went unnoticed this way: the
+# SMTP greeting, the OAuth issuer and every DNS record Stalwart published
+# kept the old name until a reload was run by hand. Reloading is cheap and
+# does not restart anything, so it runs every time.
+- name: Reload Stalwart's settings
+  ansible.builtin.command:
+    cmd: >-
+      docker run --rm
+      --env-file {{ mailstack_dir }}/.cli.env
+      {{ stalwart_cli_image }} create Action/ReloadSettings --json {}
+    chdir: "{{ mailstack_dir }}"
+  when: stalwart_provisioned.stat.exists
+  register: stalwart_reload
+  changed_when: true
+
+# The reload reports what it could not build, and nothing else surfaces it.
+# This is how a licence that no longer matches the hostname showed up.
+- name: Show warnings from the settings reload
+  ansible.builtin.debug:
+    msg: "{{ stalwart_reload.stdout }}"
+  when:
+    - stalwart_reload is not skipped
+    - "'\"warnings\": {}' not in stalwart_reload.stdout"
+
 # --- retired data volume ------------------------------------------------
 # Earlier versions of this repo put {{ data_dir }} on a dedicated block
 # device, formatted and mounted by roles/bootstrap. That is gone, but the

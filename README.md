@@ -1,5 +1,12 @@
 # Mail Sovereignty: Stalwart + Bulwark on Your Own VPS
 
+> [!IMPORTANT]
+> **This is preliminary work.** Today this repo deploys a single host on
+> OVH Canada, and that is the only setup it has been run against. Our goal
+> is a scalable, tested, monitored and automated infrastructure built on
+> managed Kubernetes offerings. See [ROADMAP.md](ROADMAP.md) for where
+> this is heading.
+
 Ansible playbooks that turn a bare Ubuntu VPS into a self-hosted mail
 server: [Stalwart](https://stalw.art/) for SMTP/IMAP/JMAP, [Bulwark](https://bulwarkmail.org/)
 for webmail, Docker to run them, Tailscale to lock down management access,
@@ -336,9 +343,11 @@ container image updates and backups do not.
 
 ## Roadmap
 
+The long-term plan (an elastic, Kubernetes-based infrastructure sized for
+up to 1M mailboxes) is in [ROADMAP.md](ROADMAP.md). Closer to home, for
+the single-host setup:
+
 - Backups of the RocksDB directory (message bodies are already in S3)
-- A second-node runbook for splitting SMTP and IMAP/JMAP roles across
-  hosts once one VPS isn't enough
 - Optionally isolating the admin console to the tailnet again, properly
   this time (real HTTPS via Cloudflare DNS-01 ACME, since the console's
   hostname wouldn't be publicly routable) - dropped for now in favor of
@@ -346,5 +355,9 @@ container image updates and backups do not.
 
 ## License
 
-Not yet decided. Don't treat this as open source until a `LICENSE` file
-shows up in the repo.
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+
+You can use, modify and redistribute this work, including to run your own
+mail infrastructure. If you distribute a modified version, or run one as a
+network service for others, you must make your changes available under the
+same license.

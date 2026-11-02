@@ -143,9 +143,11 @@ mailstack_subnet_v6: fd00:dead:beef:1::/64
 # all.yml is gitignored, but `ansible-vault encrypt` on this file is the
 # right move if the checkout is ever shared.
 
-# Pin the minor series; the CLI ships separately from the server and
-# versions independently of it (latest release at time of writing: v1.0.14).
-stalwart_cli_image: ghcr.io/stalwartlabs/cli:1.0
+# Pin an exact release, the same one as mise.toml; the CLI ships separately
+# from the server and versions independently of it. The playbook pulls this
+# tag on every run. A CLI older than the server can fail to parse its
+# schema (1.0.12 against Stalwart 1.0.2), so bump it when the server moves.
+stalwart_cli_image: ghcr.io/stalwartlabs/cli:1.0.14
 
 # Temporary credential used only while provisioning a fresh server, before
 # any account exists. Stalwart treats it as a backdoor that bypasses the

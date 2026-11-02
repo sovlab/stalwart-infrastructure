@@ -81,7 +81,7 @@ Not automatic, and yours to do:
 | Stalwart | `stalwartlabs/stalwart:v1.0` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
 | Bulwark | `ghcr.io/bulwarkmail/webmail:latest` (unpinned, `pull_policy: always`) | same file |
 | Caddy | `caddy:2-alpine` (built locally) | `ansible/roles/mailstack/files/Dockerfile.caddy` |
-| stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0` | `stalwart_cli_image` in `group_vars/all.yml` |
+| stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0.14` (pulled every run) | `stalwart_cli_image` in `group_vars/all.yml` |
 | stalwart-cli (your machine) | `1.0.14` | `mise.toml` |
 | stalwart-migrate (0.16 hosts only) | `stalwartlabs/stalwart-migrate:1.0.5` | `stalwart_migrate_version` role default |
 | Vector (optional OVH LDP) | `timberio/vector:0.58.0-debian` | `ovh_ldp_vector_image` role default |
@@ -150,10 +150,13 @@ For Stalwart specifically, do three things first:
    Secrets come back as `****` unless you pass `--include-secrets`, so this
    is a schema record, not a restorable backup.
 
-Bump `stalwart_cli_image` and the `mise.toml` pin together with the server
-when the CLI's own major version moves. The CLI ships separately and
-versions independently of the server, but `apply` talks to the server's
-schema, so a large gap between them is where breakage lives.
+Keep `stalwart_cli_image` and the `mise.toml` pin on the same exact
+release, and move them to the latest CLI whenever the server moves, even
+for a patch release. The CLI ships separately and versions independently
+of the server, but `apply` parses the server's schema, and an older CLI
+can fail on a newer one outright: 1.0.12 could not read Stalwart 1.0.2's
+schema. The playbook pulls the pinned tag on every run, so changing the
+pin is all it takes.
 
 ### Rolling back
 
@@ -356,7 +359,7 @@ is roughly how long the final sync will take.
    the last changes plus the queue, the scheduled tasks and the spam
    model, and verifies:
    ```bash
-   migrate run --final --verify-full \
+   migrate run --final \
      --source /etc/stalwart/config.json \
      --target /etc/stalwart-v1/config.json \
      --target-path-map /var/lib/stalwart=/var/lib/stalwart-v1 \
@@ -364,6 +367,12 @@ is roughly how long the final sync will take.
 
    migrate report --state /var/lib/stalwart-migrate --severity error
    ```
+   Plain `run --final`, without `--verify-full`, checks "1% of accounts,
+   at least 16", which on a server with 16 accounts or fewer is all of
+   them anyway. On mail01 (10 accounts, about 18k messages) that took 12
+   minutes of the 15-minute outage; the copy itself took 3 seconds. A
+   `verify --full` the day before tells you what to expect.
+
    Errors block the final run. `skipped` rows for spam training samples
    whose blob no longer exists are harmless; re-run with `--allow-errors`
    for those only. Anything else, and any verify mismatch: stop here
@@ -375,8 +384,10 @@ is roughly how long the final sync will take.
    sudo mv /data/stalwart-v1 /data/stalwart
    ```
 5. **Run the playbook** from your machine. The marker is now in place, so
-   it renders the 1.0 compose file, starts `stalwart:v1.0`, applies the
-   plan and deletes `docker-compose.migrate.yml`.
+   it renders the 1.0 compose file, starts `stalwart:v1.0`, waits for its
+   management API, applies the plan and deletes
+   `docker-compose.migrate.yml`. Bump `stalwart_cli_image` first if the
+   server is newer than the CLI it names.
 6. **Check it came back:**
    ```bash
    docker compose images stalwart

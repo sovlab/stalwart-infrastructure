@@ -237,6 +237,17 @@
 # succeeded the marker below keeps every later run on the ordinary path,
 # applying the plan to the live server instead.
 
+# `docker run` only pulls an image the host does not already have, so a host
+# keeps whichever CLI it pulled first. The CLI parses the server's
+# /api/schema, and one older than the server can fail on it outright: the
+# 1.0.12 cached on mail01 could not read Stalwart 1.0.2's schema, which
+# broke the apply mid-cutover. Pulling the pinned tag every run keeps the
+# host on the version group_vars names.
+- name: Pull the pinned stalwart-cli image
+  ansible.builtin.command: docker pull {{ stalwart_cli_image }}
+  register: stalwart_cli_pull
+  changed_when: "'Downloaded newer image' in stalwart_cli_pull.stdout"
+
 - name: Check whether this server has already been provisioned
   ansible.builtin.stat:
     path: "{{ mailstack_dir }}/.provisioned"
@@ -316,6 +327,25 @@
   changed_when: >-
     'Started' in compose_up.stderr or 'Created' in compose_up.stderr
     or 'Recreated' in compose_up.stderr
+
+# `up -d` returns as soon as the container starts, which is several seconds
+# before Stalwart opens its listeners. An apply sent in that gap reaches
+# Caddy, finds nothing on 8080, and fails with HTTP 502; that is exactly
+# what happened on the first 1.0 start. Same probe as the recovery wait
+# above, through the public hostname this time.
+- name: Wait for Stalwart's management API
+  ansible.builtin.command:
+    cmd: >-
+      docker run --rm
+      --env-file {{ mailstack_dir }}/.cli.env
+      {{ stalwart_cli_image }} describe
+    chdir: "{{ mailstack_dir }}"
+  when: stalwart_provisioned.stat.exists
+  register: stalwart_ready
+  changed_when: false
+  until: stalwart_ready.rc == 0
+  retries: 24
+  delay: 5
 
 # Re-applying against the running server is what makes configuration
 # changes declarative: edit group_vars, re-run the playbook, and the plan

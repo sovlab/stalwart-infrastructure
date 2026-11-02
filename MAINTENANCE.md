@@ -729,6 +729,45 @@ sudo docker run --rm --network mailstack_internal \
   ghcr.io/stalwartlabs/cli:1.0 query BlockedIp
 ```
 
+## Adding a mail domain
+
+Domains are created in the admin console, which also publishes their DNS
+records through the domain's DNS provider. One step stays in the repo: add
+the domain to `stalwart_web_domains` in `all.yml` and re-run the playbook.
+
+That list is what Caddy serves on 443 for the domain's `mta-sts`,
+`autoconfig`, `autodiscover` and `ua-auto-config` hostnames. Stalwart
+publishes those as CNAMEs to the mail hostname and answers them itself,
+but Caddy only gets certificates for names it is told about. A domain left
+off the list still sends and receives mail. What it loses is quieter:
+senders cannot fetch its MTA-STS policy, so the `_mta-sts` record
+advertises a policy nobody can read, and mail clients fall back to SRV
+records or guessing when someone adds an account.
+
+Leave a domain off if its DNS is not managed by Stalwart and those names do
+not point here. Caddy would retry a certificate it can never get.
+
+The playbook rebuilds the Caddy image and recreates the container, so
+webmail and the console drop for a few seconds. To check afterwards:
+
+```bash
+curl -s https://mta-sts.example.com/.well-known/mta-sts.txt
+curl -s -o /dev/null -w '%{http_code}\n' \
+  'https://autoconfig.example.com/mail/config-v1.1.xml?emailaddress=user@example.com'
+```
+
+The policy is published in `testing` mode, so senders only report TLS
+problems (to the `rua` address in `_smtp._tls`) and never refuse delivery
+because of it. Moving to `enforce` is a separate decision: with it, a
+lapsed certificate on the mail hostname stops inbound mail from senders
+that honour MTA-STS, and they keep the policy cached for its `max_age`.
+
+Caddy's certificates for these names come from Let's Encrypt over HTTP-01,
+so they depend on the domain's CAA records allowing `letsencrypt.org` for
+any account. Stalwart's own CAA record names only its ACME account; on
+Cloudflare-managed zones Cloudflare currently publishes a broader set in
+its place. If Caddy logs CAA errors for these names, that is why.
+
 ## The Cloudflare token is the thing to watch
 
 One token does three jobs: publishing DNS records, answering the ACME
@@ -855,3 +894,4 @@ That destroys every mailbox mapping. The S3 bodies remain, orphaned.
 | Some recipients reject, others accept | Missing PTR, or the IP is on a blocklist |
 | Bind mounts appear empty inside containers | Docker installed as a snap (the playbook removes it and asserts) |
 | Config change in the console reverted itself | The plan reconciled it, put it in `group_vars` instead |
+| `mta-sts.<domain>` fails the TLS handshake | Domain missing from `stalwart_web_domains` |

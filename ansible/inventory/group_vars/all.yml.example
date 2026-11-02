@@ -190,3 +190,15 @@ stalwart_accounts:
     description: System administrator
     role: Admin
     password: CHANGEME_ADMIN_PASSWORD
+
+# Mail domains whose mta-sts, autoconfig, autodiscover and ua-auto-config
+# hostnames Caddy should serve. Stalwart publishes those names in DNS as
+# CNAMEs to mail_hostname, but on 443 they reach Caddy, which only gets
+# certificates for names it is told about. Without an entry here, senders
+# cannot fetch the domain's MTA-STS policy and mail clients cannot
+# autoconfigure. Domains are added in the admin console, so add them here
+# too and re-run the playbook. Leave out any domain whose DNS does not point
+# those names at this server, or Caddy keeps retrying a certificate it can't
+# get.
+stalwart_web_domains:
+  - "{{ domain }}"

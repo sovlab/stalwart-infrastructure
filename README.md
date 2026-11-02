@@ -261,6 +261,9 @@ and restarts it clean. What remains is confirming it worked:
    through the Cloudflare token, so MX, SPF, DKIM, DMARC, MTA-STS and the
    autoconfig records should already be in Cloudflare. Under
    Management › Domains, the domain should report no outstanding records.
+   Caddy serves the policy those MTA-STS records point to, for each domain
+   in `stalwart_web_domains`:
+   `curl https://mta-sts.<domain>/.well-known/mta-sts.txt` should return it.
 3. Confirm TLS. Stalwart holds its own certificate as an object in the data
    store and renews it over ACME DNS-01, so nothing needs port 80 or a cron
    job. Under Settings › TLS › Certificates there should be one entry

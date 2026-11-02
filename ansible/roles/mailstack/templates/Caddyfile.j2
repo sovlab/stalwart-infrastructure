@@ -1,9 +1,5 @@
 # Managed by Ansible - roles/mailstack.
-{{ webmail_hostname }} {
-	reverse_proxy bulwark:{{ bulwark_internal_port }}
-}
-
-{{ mail_hostname }} {
+(stalwart) {
 	# PROXY protocol carries the real client address to Stalwart. Without it
 	# Stalwart sees every proxied request as coming from Caddy, and since a
 	# single scanner probe for a path like /wp-login.php is an instant ban
@@ -20,3 +16,24 @@
 		}
 	}
 }
+
+{{ webmail_hostname }} {
+	reverse_proxy bulwark:{{ bulwark_internal_port }}
+}
+
+{{ mail_hostname }} {
+	import stalwart
+}
+{% if stalwart_web_domains | default([]) %}
+
+# Per-domain hostnames that Stalwart publishes in DNS (CNAMEs to the mail
+# hostname) and answers itself, picking the domain from the Host header:
+# the MTA-STS policy, and client autoconfiguration. Caddy needs each name
+# listed to get a certificate for it, so a domain added in the admin console
+# is not served here until it is added to stalwart_web_domains too.
+{% for domain in stalwart_web_domains %}
+mta-sts.{{ domain }}, autoconfig.{{ domain }}, autodiscover.{{ domain }}, ua-auto-config.{{ domain }}{{ ',' if not loop.last else ' {' }}
+{% endfor %}
+	import stalwart
+}
+{% endif %}

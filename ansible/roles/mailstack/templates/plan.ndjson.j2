@@ -80,13 +80,22 @@
     stays empty and every failure is invisible. Tracer has no label property
     to match on, so this is a reconcile scoped to the Stdout variant with a
     by-value match: it converges the console tracers to exactly this one and
-    leaves the Log tracer alone. #}
+    leaves the Log tracer alone.
+
+    The by-value match compares every field the server stores, defaults
+    included, so all of them are spelled out. Leave one off and nothing ever
+    matches: each run then creates a fresh tracer and deletes the old one. #}
 {{ {"@type": "reconcile", "object": "Tracer", "matchOn": "*", "scope": {"@type": "Stdout"}, "value": {
      "tracer-stdout": {
        "@type": "Stdout",
        "enable": true,
        "level": "info",
-       "ansi": false}}} | to_json }}
+       "ansi": false,
+       "buffered": true,
+       "multiline": false,
+       "lossy": false,
+       "events": {},
+       "eventsPolicy": "exclude"}}} | to_json }}
 {# Caddy's network on Stalwart's IP allowlist. Belt and braces alongside
     proxyTrustedNetworks below: if the proxy ever does get attributed some
     abuse, an allowlist entry keeps it from being banned and taking the
@@ -150,9 +159,21 @@
     takes the TCP peer address as the client address, so every request
     proxied by Caddy looks like it originated from Caddy. Scanner traffic
     against the public hostname then gets attributed to the proxy, and
-    Stalwart bans it - taking the admin console and webmail down. #}
+    Stalwart bans it - taking the admin console and webmail down.
+
+    Rendered with provisioning=true, this file also becomes provision.ndjson:
+    the seed goes in here, ahead of SystemSettings. Stalwart 1.0 rejects any
+    SystemSettings update while defaultDomainId is unset ("defaultDomainId:
+    required"), and on a fresh server it stays unset until the seed has
+    created the domain. So the domain has to exist first, and the same update
+    sets it as the default. A live server already has one, and the ongoing
+    plan leaves it alone. #}
+{% if provisioning | default(false) %}
+{% include 'seed.ndjson.j2' %}
+{% endif %}
 {{ {"@type": "update", "object": "SystemSettings", "value": {
      "defaultHostname": mail_hostname,
      "mailExchangers": {"0": {"hostname": none, "priority": 10}},
      "maxConnections": 8192,
-     "proxyTrustedNetworks": {mailstack_subnet_v4: true, mailstack_subnet_v6: true}}} | to_json }}
+     "proxyTrustedNetworks": {mailstack_subnet_v4: true, mailstack_subnet_v6: true}}
+     | combine({"defaultDomainId": "#domain-primary"} if provisioning | default(false) else {})} | to_json }}

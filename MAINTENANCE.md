@@ -7,7 +7,7 @@ reading its logs, and working out why mail is not moving. Setup lives in
 ## Ground rules
 
 **The host is not the source of truth, the repo is.** Everything under
-`/data/mailstack` (compose file, Caddyfile, `plan.ndjson`, `seed.ndjson`,
+`/data/mailstack` (compose file, Caddyfile, `plan.ndjson`, `provision.ndjson`,
 the CLI env files) is rendered by `roles/mailstack` and overwritten on the
 next playbook run. Edit files in this repo, then re-run:
 
@@ -816,8 +816,8 @@ is confusing rather than obvious.
 `/data/mailstack/.provisioned`:
 
 - **Absent**: brings Stalwart up in recovery mode with a temporary admin
-  credential, applies the plan and the seed, writes the marker, and
-  restarts clean.
+  credential, applies `provision.ndjson` (plan plus seed), writes the
+  marker, and restarts clean.
 - **Present**: applies the plan alone to the running server as
   `stalwart_admin_account`.
 

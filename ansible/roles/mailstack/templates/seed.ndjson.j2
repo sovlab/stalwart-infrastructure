@@ -1,7 +1,10 @@
-{# Managed by Ansible - roles/mailstack. Seed plan for `stalwart-cli apply`,
-    applied exactly once: while provisioning a fresh server, concatenated
-    after plan.ndjson so it can reference the DnsServer defined there as
-    #dnsserver-cf. Every later playbook run applies plan.ndjson alone.
+{# Managed by Ansible - roles/mailstack. Seed for `stalwart-cli apply`, never
+    rendered on its own: plan.ndjson.j2 includes it when rendered with
+    provisioning=true, which produces provision.ndjson, applied exactly once
+    while provisioning a fresh server. It sits after the plan's DnsServer,
+    which the Domain references as #dnsserver-cf, and before SystemSettings,
+    which makes the Domain the default. Every later playbook run applies
+    plan.ndjson alone.
 
     What lives here is what the admin console owns after day one: the
     primary domain, its ACME provider and the first accounts. Re-applying
@@ -67,5 +70,3 @@
        "encryptionAtRest": {"@type": "Disabled"},
        "credentials": {"0": {"@type": "Password", "secret": a.password, "allowedIps": {}}}}}} | to_json }}
 {% endfor %}
-{{ {"@type": "update", "object": "SystemSettings", "value": {
-     "defaultDomainId": "#domain-primary"}} | to_json }}

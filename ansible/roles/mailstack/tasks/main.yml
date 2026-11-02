@@ -163,13 +163,16 @@
     mode: "0600"   # embeds the Cloudflare token and the S3 secret
   no_log: true
 
-# Applied only while provisioning; see the header of seed.ndjson.j2 for why
-# re-applying it to a live server is harmful.
-- name: Render the provisioning seed plan
+# The same plan with the seed folded in, applied only while provisioning; see
+# the headers of seed.ndjson.j2 for why re-applying the seed to a live server
+# is harmful, and of the SystemSettings op in plan.ndjson.j2 for the order.
+- name: Render the provisioning plan
   ansible.builtin.template:
-    src: seed.ndjson.j2
-    dest: "{{ mailstack_dir }}/seed.ndjson"
+    src: plan.ndjson.j2
+    dest: "{{ mailstack_dir }}/provision.ndjson"
     mode: "0600"   # embeds every seeded account password
+  vars:
+    provisioning: true
   no_log: true
 
 # stalwart-cli credentials go in env files rather than on the `docker run`
@@ -277,17 +280,13 @@
     # carry the Cloudflare token and every account password. Piping
     # sidesteps the ownership question entirely and keeps the files off the
     # container's filesystem.
-    #
-    # One stream, plan first: the seed's Domain references the plan's
-    # DnsServer by #dnsserver-cf, and client ids only resolve within a
-    # single apply.
-    - name: Apply the configuration plan and the seed
+    - name: Apply the provisioning plan
       ansible.builtin.shell:
         cmd: >-
-          cat {{ mailstack_dir }}/plan.ndjson {{ mailstack_dir }}/seed.ndjson |
           docker run --rm -i --network mailstack_internal
           --env-file {{ mailstack_dir }}/.cli-recovery.env
           {{ stalwart_cli_image }} apply --stdin
+          < {{ mailstack_dir }}/provision.ndjson
         chdir: "{{ mailstack_dir }}"
       register: stalwart_apply
       changed_when: true

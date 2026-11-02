@@ -7,27 +7,34 @@ reading its logs, and working out why mail is not moving. Setup lives in
 ## Ground rules
 
 **The host is not the source of truth, the repo is.** Everything under
-`/data/mailstack` (compose file, Caddyfile, `plan.ndjson`, the CLI env
-files) is rendered by `roles/mailstack` and overwritten on the next
-playbook run. Edit files in this repo, then re-run:
+`/data/mailstack` (compose file, Caddyfile, `plan.ndjson`, `seed.ndjson`,
+the CLI env files) is rendered by `roles/mailstack` and overwritten on the
+next playbook run. Edit files in this repo, then re-run:
 
 ```bash
 cd ansible
 ansible-playbook playbooks/10-site.yml
 ```
 
-**Stalwart's own configuration is declarative too.** Domain, accounts,
-listeners, DNS provider, ACME, S3, CORS and the proxy settings all come
-from `group_vars/all.yml` via `plan.ndjson.j2`. Changing them in the admin
-console works until the next playbook run reconciles them back.
+**Stalwart's infrastructure configuration is declarative too.** Listeners,
+the Cloudflare DNS provider, logging, S3, CORS and the proxy settings come
+from `group_vars/all.yml` via `plan.ndjson.j2`, applied on every playbook
+run. Changing them in the admin console works until the next run
+reconciles them back.
 
-The exception is anything the plan does not describe: mailboxes, Sieve
-scripts, blocked IPs, certificates and DKIM keys are server state, not
-configuration, and the playbook leaves them alone.
+**Domains and accounts are not.** The primary domain, its ACME provider
+and `stalwart_accounts` are in `seed.ndjson.j2`, applied once when a fresh
+server is provisioned. After that the admin console owns them, along with
+everything else the plan does not describe: other domains, tenants, the
+Enterprise license, mailboxes, Sieve scripts, blocked IPs, certificates
+and DKIM keys. Editing `stalwart_accounts` on a provisioned server changes
+nothing. Before this split the seed was re-applied on every run, which
+reset the seeded accounts' passwords and deleted their app passwords and
+TOTP, and registered a new Let's Encrypt account each time.
 
-**Upserts never destroy.** Removing an account from `stalwart_accounts`
-does not delete it. Deleting is a deliberate act in the console or through
-`stalwart-cli delete`.
+**Upserts never destroy.** Nothing the playbook applies deletes an object.
+Deleting is a deliberate act in the console or through `stalwart-cli
+delete`.
 
 ## Getting onto the box
 
@@ -71,11 +78,12 @@ Not automatic, and yours to do:
 
 | Component | Image | Pinned in |
 |---|---|---|
-| Stalwart | `stalwartlabs/stalwart:v0.16` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
+| Stalwart | `stalwartlabs/stalwart:v1.0` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
 | Bulwark | `ghcr.io/bulwarkmail/webmail:latest` (unpinned, `pull_policy: always`) | same file |
 | Caddy | `caddy:2-alpine` (built locally) | `ansible/roles/mailstack/files/Dockerfile.caddy` |
 | stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0` | `stalwart_cli_image` in `group_vars/all.yml` |
-| stalwart-cli (your machine) | `1.0.12` | `mise.toml` |
+| stalwart-cli (your machine) | `1.0.14` | `mise.toml` |
+| stalwart-migrate (0.16 hosts only) | `stalwartlabs/stalwart-migrate:1.0.5` | `stalwart_migrate_version` role default |
 | Vector (optional OVH LDP) | `timberio/vector:0.58.0-debian` | `ovh_ldp_vector_image` role default |
 
 All of these are series tags, not digests, so the upstream tag moves as
@@ -128,8 +136,8 @@ normal `up -d`. No separate pull step is needed for a tag change.
 For Stalwart specifically, do three things first:
 
 1. Read the release notes for data-store migrations and for changes to the
-   configuration schema. `plan.ndjson.j2` was derived from a
-   `stalwart-cli snapshot` of one specific version; a renamed field or a
+   configuration schema. `plan.ndjson.j2` and `seed.ndjson.j2` were
+   derived from a `stalwart-cli snapshot` of one specific version; a renamed field or a
    changed enum variant surfaces as an `apply` failure mid-playbook, and
    occasionally as a setting silently reverting to its default.
 2. Take a backup (see below). A data-store migration is one-way.
@@ -152,7 +160,8 @@ schema, so a large gap between them is where breakage lives.
 Revert the tag in the repo and re-run the playbook. Caddy and Bulwark roll
 back cleanly. **Stalwart may not**: once it has migrated its RocksDB store,
 an older binary can refuse to open it or, worse, open it wrongly. Restoring
-the pre-upgrade backup is the real rollback for Stalwart.
+the pre-upgrade backup is the real rollback for Stalwart. The 0.16 to 1.0
+move has its own rollback, covered in the next section.
 
 ### Restarting things
 
@@ -175,6 +184,280 @@ ansible-galaxy collection install -r ansible/requirements.yml --upgrade
 Ansible is pinned to `latest` in `mise.toml`, so `mise install` can move it
 under you. If a playbook run starts failing for no reason you changed,
 check whether Ansible itself moved.
+
+## Migrating from Stalwart 0.16 to 1.0
+
+A one-off. Stalwart 1.0 uses a new store layout and cannot open a 0.16
+store, so there is no in-place upgrade: `stalwart-migrate` copies
+everything into a new, empty store, and the server is switched over to
+it. Delete this section once every host is on 1.0 and the old store is
+gone.
+
+Message bodies are in S3 and the migration reuses them where they are, so
+only the RocksDB metadata is copied. The copy runs while 0.16 keeps
+serving mail; the outage is only the final sync and the switch.
+
+### How the repo enforces this
+
+`roles/mailstack` keys on a marker file, `/data/stalwart/.store-v1`, next
+to `etc/` and `data/` but outside both container mounts:
+
+- **No store yet** (fresh host): the marker is written and 1.0 creates
+  its own store.
+- **Store with the marker**: normal deploy.
+- **Store without the marker** (a 0.16 host): the playbook creates
+  `/data/stalwart-v1/{etc,data}` and `/data/stalwart-migrate`, renders
+  the target `config.json` and `docker-compose.migrate.yml`, and then
+  **fails on purpose**, before it renders the stack's compose file or
+  touches a container. The running 0.16 server is left alone.
+
+The marker lives in `/data/stalwart-v1` from the start, so it moves into
+place with the directory at cutover.
+
+### What users will notice
+
+- **Everyone signs in again.** OAuth tokens are not migrated, and Bulwark
+  uses OAuth tokens for password+TOTP logins as well.
+- IMAP and JMAP clients do not resync: account, mailbox and message ids,
+  UIDs and UIDVALIDITY are preserved. CalDAV and CardDAV clients refetch
+  once, because ETags change.
+- Search is incomplete for a while after the switch, until 1.0 has
+  rebuilt the full-text index in the background.
+- Mail queued for delivery carries over (the final run copies the queue).
+
+### Before the window
+
+1. **Bulwark on 1.18 or later, while still on 0.16.** Every release from
+   1.18 works with both server versions, so it goes first and the two
+   upgrades do not land together. Deploy it from a branch that does not
+   carry the Stalwart bump: on a 0.16 host, this branch's playbook stops
+   before it renders the compose file, so it cannot update Bulwark.
+   Confirm with `docker compose images bulwark`.
+2. **Bucket versioning on** (it is), with noncurrent versions kept for
+   longer than you would ever want to roll back. The rollback below
+   depends on it.
+3. **`bulwark_admin_password` set in `group_vars/all.yml`**, and
+   `group_vars/all.yml` and `.env` in the password manager. Without the
+   admin password Bulwark's dashboard is disabled and cutover step 7
+   cannot be done. It reaches the host with the cutover's playbook run,
+   which is the first one to render the compose file on this branch.
+4. **Disk.** The target is a second copy of the RocksDB store, plus the
+   backup tarball:
+   ```bash
+   sudo du -sh /data/stalwart/data
+   df -h /
+   ```
+5. **The source must be 0.16.27**, the only version the tool accepts.
+   The `v0.16` tag points to it, but the host only has whatever it pulled
+   last. Do this with the old compose file still in place:
+   ```bash
+   cd /data/mailstack
+   docker compose pull stalwart && docker compose up -d stalwart
+   docker compose logs --since 2m stalwart | grep -i version
+   ```
+
+6. **Tenant domains need tenant-owned providers.** In 1.0 an object in a
+   tenant may only reference objects in the same tenant. A tenant's
+   domain pointing at a global ACME provider or DnsServer is switched to
+   manual certificate (and DNS) management by the migration, so its
+   certificate stops renewing and DKIM rotation stops publishing, quietly.
+   List them:
+   ```bash
+   C="sudo docker run --rm --env-file .cli.env ghcr.io/stalwartlabs/cli:1.0"
+   for id in $($C query Domain --json | jq -r '.[]'); do
+     $C get Domain $id --json | jq -c '{name, memberTenantId,
+       acme: .certificateManagement.acmeProviderId,
+       dns: .dnsManagement.dnsServerId}'
+   done
+   ```
+   For each tenant with a domain on a global provider, create one
+   AcmeProvider and one DnsServer with that tenant set, and point its
+   domains at them. This can be done in the 0.16 console beforehand, or in
+   1.0 right after cutover.
+7. **Optionally, delete unused ACME providers.** Before the seed was split
+   out, every playbook run registered a new one. Any provider no domain
+   references can go, which also keeps it out of the migration.
+
+### Setting up the tool
+
+Run the playbook from this branch. It stops with "holds a Stalwart 0.16
+store, which 1.0 cannot open"; that is expected, and means the
+directories and the tool are in place. Then, on the host:
+
+```bash
+cd /data/mailstack
+alias migrate='docker compose -f docker-compose.migrate.yml run --rm migrate'
+
+migrate prepare \
+  --source /etc/stalwart/config.json \
+  --state /var/lib/stalwart-migrate
+```
+
+`prepare` is interactive and needs a terminal. Two questions always come
+up:
+
+- **Reuse the external blob store?** Yes. Bodies stay where they are in
+  the bucket, and the target only records which keys belong to which
+  message.
+- **Which data categories to copy?** All of them.
+
+The rest depend on the configuration (OAuth clients, forwarded headers,
+changed defaults, new permissions). It writes `answers.toml` and
+`prepare-report.txt` to `/data/stalwart-migrate`. Read the report before
+going further:
+
+```bash
+sudo less /data/stalwart-migrate/prepare-report.txt
+```
+
+### Copying while 0.16 runs
+
+Repeat as often as you like. Each run copies only what changed since the
+last one, and an interrupted run resumes:
+
+```bash
+migrate run \
+  --source /etc/stalwart/config.json \
+  --target /etc/stalwart-v1/config.json \
+  --target-path-map /var/lib/stalwart=/var/lib/stalwart-v1 \
+  --state /var/lib/stalwart-migrate
+
+migrate status --state /var/lib/stalwart-migrate
+```
+
+`--target-path-map` is there because the target `config.json` names
+`/var/lib/stalwart/db`, the path the live server will use after cutover,
+while the tool sees the target under `/var/lib/stalwart-v1`.
+
+`--max-ops-per-sec` limits the load on the live server if it is busy. If
+runs fail on S3 timeouts, raise the BlobStore timeout and retries on the
+0.16 server in the admin console (the tool reads them from the 0.16
+store) and pass a longer `--retry-budget`.
+
+Get to the point where a run finishes quickly with little to copy. That
+is roughly how long the final sync will take.
+
+### Cutover
+
+1. **Stop and remove the 0.16 container.** Removing rather than stopping
+   means nothing, including a 03:30 reboot, can start the 0.16 image on
+   the 1.0 store later. Starting either version on the other's store
+   corrupts it.
+   ```bash
+   cd /data/mailstack
+   docker compose rm -sf stalwart
+   ```
+2. **Cold backup of the 0.16 store**, then copy it off the box:
+   ```bash
+   sudo tar -C /data/stalwart -czf /root/stalwart-0.16-$(date +%F).tar.gz data etc
+   ```
+3. **Final sync.** It asks you to type `yes`, watches the 0.16 store for
+   30 seconds to make sure nothing is still writing to it, then copies
+   the last changes plus the queue, the scheduled tasks and the spam
+   model, and verifies:
+   ```bash
+   migrate run --final --verify-full \
+     --source /etc/stalwart/config.json \
+     --target /etc/stalwart-v1/config.json \
+     --target-path-map /var/lib/stalwart=/var/lib/stalwart-v1 \
+     --state /var/lib/stalwart-migrate
+
+   migrate report --state /var/lib/stalwart-migrate --severity error
+   ```
+   Errors block the final run. `skipped` rows for spam training samples
+   whose blob no longer exists are harmless; re-run with `--allow-errors`
+   for those only. Anything else, and any verify mismatch: stop here
+   and [roll back](#rolling-back-the-migration), which at this point is
+   cheap.
+4. **Swap the directories:**
+   ```bash
+   sudo mv /data/stalwart /data/stalwart-0.16
+   sudo mv /data/stalwart-v1 /data/stalwart
+   ```
+5. **Run the playbook** from your machine. The marker is now in place, so
+   it renders the 1.0 compose file, starts `stalwart:v1.0`, applies the
+   plan and deletes `docker-compose.migrate.yml`.
+6. **Check it came back:**
+   ```bash
+   docker compose images stalwart
+   docker compose logs --since 10m stalwart | grep -i -E 'error|warn|fail'
+   ```
+   Then IMAPS on 993, submission on 465, a message in from outside and
+   one out with `dkim=pass`, as in
+   [Diagnosing mail delivery](#diagnosing-mail-delivery). Check the
+   certificate is still the one from before (`openssl s_client`, as in
+   [It worked yesterday](#it-worked-yesterday-and-stopped-today)).
+7. **Bulwark:** sign in to `https://<webmail_hostname>/admin` with
+   `bulwark_admin_password` and, under Authentication, run **Auto-configure
+   OAuth** once. 1.0 only accepts OAuth clients it knows about (0.16
+   accepted any), and this registers Bulwark and `bulwark-mobile`.
+   Without it mail works, but the password, two-factor and app-password
+   settings do not. Then sign in to webmail yourself.
+8. **Scheduled tasks.** In the console, check there is an ACME renewal
+   task and a DKIM management task for the domain. The final run copies
+   them; if they are missing, certificates and DKIM keys stop rotating
+   silently, months later. Create one of each if so.
+9. **Admin console returns 404:** a stale web UI bundle from 0.16. The
+   1.0.2 server and migrate 1.0.4+ both deal with it, but if it happens,
+   run the `UpdateApps` action.
+
+Keep `/data/stalwart-0.16` and `/data/stalwart-migrate` until 1.0 has run
+cleanly for a few weeks. Rollback after the fact needs the state
+directory.
+
+### Rolling back the migration
+
+**Before 1.0 has accepted any mail** (the final run failed, or step 5 or 6
+went wrong): the 0.16 store is untouched, so put it back.
+
+```bash
+cd /data/mailstack
+docker compose rm -sf stalwart
+sudo mv /data/stalwart /data/stalwart-v1          # only if step 4 ran
+sudo mv /data/stalwart-0.16 /data/stalwart        # only if step 4 ran
+```
+
+One thing in the bucket did change: a completed final run overwrites
+`STALWART_SPAM_CLASSIFIER_MODEL.lz4` and `STALWART_SPAM_TRAIN_DATA.lz4`
+(under the bucket's key prefix) with the 1.0 format, and deletes the
+cached web UI bundles `STALWART_APP_*`. 0.16 refuses to start on the 1.0
+spam model. Restore the previous version of each key from versioning, or
+delete the two spam keys and let 0.16 retrain:
+
+```bash
+aws --endpoint-url "$S3_ENDPOINT" s3api list-object-versions \
+  --bucket "$S3_BUCKET" --prefix "${S3_KEY_PREFIX}STALWART_"
+aws --endpoint-url "$S3_ENDPOINT" s3api copy-object \
+  --bucket "$S3_BUCKET" --key <key> --copy-source "$S3_BUCKET/<key>?versionId=<id>"
+```
+
+Then deploy `master` (still on `v0.16`, no store guard) with the
+playbook.
+
+**After 1.0 has served mail**, the 0.16 store is stale and is not a
+fallback: 1.0's blob cleanup deletes bodies it no longer references,
+including ones the 0.16 store still points to. The way back is
+`stalwart-migrate rollback`, which copies the 1.0 store into a new, empty
+0.16 store, using `/data/stalwart-migrate` as its record of the forward
+run. Drain the outbound queue first (queue and tasks stay with 1.0), and
+expect anything that only exists in 1.0 to be dropped. Follow
+[Stalwart's rollback guide](https://stalw.art/docs/migration/upgrade-0-16/rollback/)
+for the exact invocation; with a shared bucket it needs
+`--allow-shared-deletes` or `--keep-v1-spam-model`.
+
+### Afterwards
+
+Once 1.0 has proved itself:
+
+```bash
+sudo rm -rf /data/stalwart-0.16 /data/stalwart-migrate
+```
+
+and remove `docker-compose.migrate.yml.j2`, the `stalwart_migrate_version`
+default, and this section. In the "Prepare the Stalwart 0.16 to 1.0
+migration" block of `roles/mailstack/tasks/main.yml`, drop the setup
+tasks but keep the final `fail`: a store without the marker should still
+stop the playbook rather than be handed to a server that cannot read it.
 
 ## Reading the logs
 
@@ -470,8 +753,12 @@ What actually needs backing up:
   structure, indexes, the TLS certificate, the ACME account key and the
   DKIM private keys. Message bodies are in S3, but this directory is what
   maps them to mailboxes. Without it, the bucket is unreadable noise.
-- **The S3 bucket**, which is your provider's problem. Turn on versioning
-  and confirm the retention you are getting.
+- **The S3 bucket**, which is your provider's problem. Versioning is on,
+  which is what makes a RocksDB copy and the bucket line up: Stalwart's
+  daily blob cleanup (04:00) deletes blobs nothing references any more,
+  and without versioning a store restored from yesterday would point at
+  bodies that are already gone. Confirm how long noncurrent versions are
+  kept, since that is the real limit on how old a usable backup can be.
 - **`ansible/inventory/group_vars/all.yml` and `.env`.** Both gitignored,
   both carrying every password in this deployment. A password manager is
   the right place, not a second copy on the same VPS.
@@ -496,6 +783,10 @@ To restore onto a rebuilt host: run the playbooks as normal, then stop the
 stack, replace `/data/stalwart/data` with the backup (preserving
 `2000:2000` ownership), and start it. Restoring keeps the existing DKIM
 keys and certificate, so nothing needs republishing.
+
+A backup only restores onto the Stalwart version that wrote it. A 0.16
+tarball is not a way back from 1.0 once 1.0 has served mail; see
+[Rolling back](#rolling-back-the-migration) in the migration section.
 
 A from-scratch rebuild with no backup also works, in the sense that
 Stalwart issues a new certificate and publishes new DKIM keys itself. What
@@ -525,13 +816,16 @@ is confusing rather than obvious.
 `/data/mailstack/.provisioned`:
 
 - **Absent**: brings Stalwart up in recovery mode with a temporary admin
-  credential, applies the plan, writes the marker, and restarts clean.
-- **Present**: applies the plan to the running server as
+  credential, applies the plan and the seed, writes the marker, and
+  restarts clean.
+- **Present**: applies the plan alone to the running server as
   `stalwart_admin_account`.
 
-Deleting the marker on a live server is not destructive, but it does drop
-the stack into recovery mode briefly, which takes mail services down for
-the duration. A genuine wipe means stopping the stack, removing
+Deleting the marker on a live server drops the stack into recovery mode
+briefly, which takes mail services down for the duration, and re-applies
+the seed. That resets every seeded account to `stalwart_accounts`
+(password, role, and no app passwords or TOTP) and registers yet another
+ACME provider, so do not do it to a server people are using. A genuine wipe means stopping the stack, removing
 `/data/stalwart/data`, deleting the marker, and re-running the playbook.
 That destroys every mailbox mapping. The S3 bodies remain, orphaned.
 

@@ -8,13 +8,14 @@
       - s3_access_key | default("", true) | length > 0
       - s3_secret_key | default("", true) | length > 0
       - stalwart_recovery_password | default("", true) | length > 0
+      - bulwark_admin_password | default("", true) | length > 0
       - stalwart_accounts | default([], true) | length > 0
       - stalwart_admin_account in (stalwart_accounts | map(attribute="name") | list)
       - stalwart_accounts | rejectattr("password", "defined") | list | length == 0
     fail_msg: >-
       Configuration is incomplete. CLOUDFLARE_API_TOKEN, S3_ACCESS_KEY and
       S3_SECRET_KEY must be set in .env; s3_endpoint and s3_bucket,
-      stalwart_recovery_password, stalwart_admin_account
+      stalwart_recovery_password, bulwark_admin_password, stalwart_admin_account
       and stalwart_accounts must be set in group_vars/all.yml, every account
       needs a password, and stalwart_admin_account must name one of them.
       The Cloudflare token is no longer optional: Stalwart uses it to publish
@@ -49,6 +50,87 @@
     - "{{ data_dir }}/stalwart/etc"
     - "{{ data_dir }}/stalwart/data"
 
+# --- store format guard -------------------------------------------------
+# Stalwart 1.0 cannot open a 0.16 store; the upgrade is a copy into a new
+# store with stalwart-migrate. The image tag in docker-compose.yml.j2 alone
+# would happily point 1.0 at the old store on the next run, so the store
+# carries a marker instead: .store-v1 sits next to etc/ and data/, outside
+# both container mounts, and moves with the directory at cutover.
+#
+# A store without the marker is a 0.16 store. The playbook then sets up the
+# migration directories and tool, and stops before touching the running
+# stack. A fresh host has no store yet, so 1.0 creates one and it is marked
+# straight away.
+
+- name: Check for an existing Stalwart data store
+  ansible.builtin.stat:
+    path: "{{ data_dir }}/stalwart/data/db"
+  register: stalwart_store
+
+- name: Check whether the store is in the 1.0 format
+  ansible.builtin.stat:
+    path: "{{ data_dir }}/stalwart/.store-v1"
+  register: stalwart_store_v1
+
+- name: Mark a fresh store as 1.0 format
+  ansible.builtin.copy:
+    content: "Stalwart 1.0 store. Written by roles/mailstack; see MAINTENANCE.md before deleting.\n"
+    dest: "{{ data_dir }}/stalwart/.store-v1"
+    mode: "0644"
+  when: not stalwart_store.stat.exists
+
+- name: Prepare the Stalwart 0.16 to 1.0 migration
+  when: stalwart_store.stat.exists and not stalwart_store_v1.stat.exists
+  block:
+    - name: Create the migration target and state directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+        owner: "2000"
+        group: "2000"
+      loop:
+        - "{{ data_dir }}/stalwart-v1/etc"
+        - "{{ data_dir }}/stalwart-v1/data"
+        - "{{ data_dir }}/stalwart-migrate"
+
+    # The same template as the live config.json, on purpose: the target
+    # names /var/lib/stalwart/db, and the tool is told where that really is
+    # with --target-path-map.
+    - name: Render the migration target's data store configuration
+      ansible.builtin.template:
+        src: config.json.j2
+        dest: "{{ data_dir }}/stalwart-v1/etc/config.json"
+        owner: "2000"
+        group: "2000"
+        mode: "0640"
+
+    - name: Mark the migration target as 1.0 format
+      ansible.builtin.copy:
+        content: "Stalwart 1.0 store. Written by roles/mailstack; see MAINTENANCE.md before deleting.\n"
+        dest: "{{ data_dir }}/stalwart-v1/.store-v1"
+        mode: "0644"
+
+    - name: Render the migration compose file
+      ansible.builtin.template:
+        src: docker-compose.migrate.yml.j2
+        dest: "{{ mailstack_dir }}/docker-compose.migrate.yml"
+        mode: "0644"
+
+    - name: Stop before deploying Stalwart 1.0 over a 0.16 store
+      ansible.builtin.fail:
+        msg: >-
+          {{ data_dir }}/stalwart holds a Stalwart 0.16 store, which 1.0
+          cannot open. The running stack was left alone. The migration
+          tool is ready in {{ mailstack_dir }}/docker-compose.migrate.yml;
+          follow "Migrating from Stalwart 0.16 to 1.0" in MAINTENANCE.md,
+          then re-run this playbook.
+
+- name: Remove the migration compose file once the store is on 1.0
+  ansible.builtin.file:
+    path: "{{ mailstack_dir }}/docker-compose.migrate.yml"
+    state: absent
+
 # Same reasoning as Stalwart's directories above: the bulwark image runs
 # as uid 1001, and a root:root bind mount leaves it unable to write its
 # own audit log or persist admin-configured settings (including the
@@ -78,7 +160,16 @@
   ansible.builtin.template:
     src: plan.ndjson.j2
     dest: "{{ mailstack_dir }}/plan.ndjson"
-    mode: "0600"   # embeds the Cloudflare token and every account password
+    mode: "0600"   # embeds the Cloudflare token and the S3 secret
+  no_log: true
+
+# Applied only while provisioning; see the header of seed.ndjson.j2 for why
+# re-applying it to a live server is harmful.
+- name: Render the provisioning seed plan
+  ansible.builtin.template:
+    src: seed.ndjson.j2
+    dest: "{{ mailstack_dir }}/seed.ndjson"
+    mode: "0600"   # embeds every seeded account password
   no_log: true
 
 # stalwart-cli credentials go in env files rather than on the `docker run`
@@ -105,11 +196,15 @@
     mode: "0600"
   no_log: true
 
+# Group docker rather than world-readable: it carries Bulwark's session
+# secret and initial admin password, and {{ admin_user }} still needs to
+# read it to run `docker compose` without sudo.
 - name: Render docker-compose.yml
   ansible.builtin.template:
     src: docker-compose.yml.j2
     dest: "{{ mailstack_dir }}/docker-compose.yml"
-    mode: "0644"
+    group: docker
+    mode: "0640"
 
 - name: Render the recovery-mode compose overlay
   ansible.builtin.template:
@@ -178,17 +273,21 @@
 
     # The plan arrives on stdin rather than as a bind mount. The CLI image
     # runs as a non-root user, so it cannot read a 0600 root-owned file
-    # mounted into the container, and the plan has to stay 0600: it carries
-    # the Cloudflare token and every account password. Piping sidesteps the
-    # ownership question entirely and keeps the file off the container's
-    # filesystem.
-    - name: Apply the configuration plan
+    # mounted into the container, and both files have to stay 0600: they
+    # carry the Cloudflare token and every account password. Piping
+    # sidesteps the ownership question entirely and keeps the files off the
+    # container's filesystem.
+    #
+    # One stream, plan first: the seed's Domain references the plan's
+    # DnsServer by #dnsserver-cf, and client ids only resolve within a
+    # single apply.
+    - name: Apply the configuration plan and the seed
       ansible.builtin.shell:
         cmd: >-
+          cat {{ mailstack_dir }}/plan.ndjson {{ mailstack_dir }}/seed.ndjson |
           docker run --rm -i --network mailstack_internal
           --env-file {{ mailstack_dir }}/.cli-recovery.env
           {{ stalwart_cli_image }} apply --stdin
-          < {{ mailstack_dir }}/plan.ndjson
         chdir: "{{ mailstack_dir }}"
       register: stalwart_apply
       changed_when: true
@@ -221,9 +320,15 @@
 
 # Re-applying against the running server is what makes configuration
 # changes declarative: edit group_vars, re-run the playbook, and the plan
-# reconciles. Every operation is an upsert, so this converges rather than
-# duplicating. It authenticates as one of the accounts the plan itself
-# defines, which is why no separate API token is needed.
+# reconciles. Every operation is an upsert or a singleton update, so this
+# converges rather than duplicating. The seed is deliberately not part of
+# it: accounts, domains and the ACME provider belong to the admin console
+# once the server exists.
+#
+# It authenticates as stalwart_admin_account, one of the seeded accounts,
+# which is why no separate API token is needed. The seed no longer resets
+# that password, so if it is changed in the console, change it in
+# group_vars to match or this task fails to log in.
 - name: Apply the configuration plan to the running server
   ansible.builtin.shell:
     cmd: >-

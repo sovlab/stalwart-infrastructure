@@ -113,6 +113,15 @@ bulwark_internal_port: 3000
 # login never completes. Generate with `openssl rand -base64 32`.
 bulwark_session_secret: CHANGEME_BULWARK_SESSION_SECRET
 
+# Bulwark's admin dashboard (/admin on the webmail hostname). Without it the
+# dashboard stays disabled, and its "Auto-configure OAuth" action is what
+# registers Bulwark as an OAuth client with Stalwart 1.0. Bulwark only reads
+# this while it has no admin.json yet, hashes it into that file, and ignores
+# it from then on: change the password in the dashboard afterwards, or
+# delete {{ data_dir }}/bulwark/admin/admin.json to reset it from here.
+# Generate with `openssl rand -base64 24`.
+bulwark_admin_password: CHANGEME_BULWARK_ADMIN_PASSWORD
+
 # The mail stack's private Docker network. Pinned because Stalwart must be
 # told this range is a reverse proxy: without it, it reads Caddy's address
 # as the client address for every proxied request, attributes the internet's
@@ -123,16 +132,19 @@ mailstack_subnet_v4: 172.18.0.0/16
 mailstack_subnet_v6: fd00:dead:beef:1::/64
 
 # --- stalwart declarative configuration -----------------------------------
-# roles/mailstack renders these into plan.ndjson and applies them with
+# roles/mailstack renders these into two plans and applies them with
 # stalwart-cli. There is no setup wizard: a fresh server is provisioned from
-# this file, and re-running the playbook reconciles a live one to match it.
+# this file. Re-running the playbook reconciles the infrastructure settings
+# (DNS provider token, listeners, logging, S3, CORS, proxy networks) on a
+# live server; the domain and stalwart_accounts are seed-only, applied once
+# at provisioning and owned by the admin console from then on.
 #
 # Passwords live here rather than in .env because there is one per account.
 # all.yml is gitignored, but `ansible-vault encrypt` on this file is the
 # right move if the checkout is ever shared.
 
 # Pin the minor series; the CLI ships separately from the server and
-# versions independently of it (latest release at time of writing: v1.0.12).
+# versions independently of it (latest release at time of writing: v1.0.14).
 stalwart_cli_image: ghcr.io/stalwartlabs/cli:1.0
 
 # Temporary credential used only while provisioning a fresh server, before
@@ -143,12 +155,14 @@ stalwart_recovery_password: CHANGEME_RECOVERY_PASSWORD
 
 # The account the playbook authenticates as when applying the plan to an
 # already-provisioned server. Must name one of stalwart_accounts, with
-# role Admin.
+# role Admin. Its password here must keep matching the server's: the seed
+# sets it once, and a change in the console is not pushed back.
 stalwart_admin_account: admin
 
-# name is the local part; the address becomes name@{{ domain }}. role is
-# Admin or User. Removing an entry here does NOT delete the account: the
-# plan is built from upserts, which never destroy.
+# Seed accounts, created once while provisioning a fresh server. name is
+# the local part; the address becomes name@{{ domain }}. role is Admin or
+# User. Editing or removing an entry later changes nothing on a live
+# server: add, change and delete accounts in the admin console.
 # Stalwart's network listeners. These do NOT exist by default: the setup
 # wizard creates them, and a server provisioned declaratively through
 # recovery mode starts with only the management listener on 8080. Without

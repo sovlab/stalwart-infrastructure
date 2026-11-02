@@ -8,7 +8,9 @@ name: mailstack
 
 services:
   stalwart:
-    image: stalwartlabs/stalwart:v0.16
+    # 1.0 cannot open a 0.16 store. roles/mailstack refuses to deploy this
+    # over one; see "Migrating from Stalwart 0.16 to 1.0" in MAINTENANCE.md.
+    image: stalwartlabs/stalwart:v1.0
     restart: unless-stopped
     # Keep this explicit even though it matches Docker's daemon default.
     # Changing the daemon default affects only newly-created containers;
@@ -39,7 +41,7 @@ services:
     # straight back into bootstrap mode. Both dirs are chowned to uid 2000
     # by roles/mailstack; see the task there for why.
     volumes:
-      # config.json - the only Stalwart config left on disk in v0.16;
+      # config.json - the only Stalwart config left on disk since v0.16;
       # everything else is an object in the data store.
       - "{{ data_dir }}/stalwart/etc:/etc/stalwart"
       # RocksDB, local blobs, bootstrap registry.
@@ -107,6 +109,8 @@ services:
       # administrator-configured endpoint so TOTP access tokens can refresh.
       OAUTH_ALLOW_PRIVATE_ENDPOINTS: "true"
       SESSION_SECRET: "{{ bulwark_session_secret }}"
+      # Only read until Bulwark has written admin.json; see group_vars.
+      ADMIN_PASSWORD: "{{ bulwark_admin_password }}"
     volumes:
       - "{{ data_dir }}/bulwark/admin:/app/data/admin"
       - "{{ data_dir }}/bulwark/admin-state:/app/data/admin-state"

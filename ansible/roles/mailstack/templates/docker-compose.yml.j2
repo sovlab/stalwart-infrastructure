@@ -83,7 +83,10 @@ services:
           - "{{ mail_hostname }}"
 
   bulwark:
-    image: ghcr.io/bulwarkmail/webmail:1.11
+    # Tracking latest while Bulwark releases often. pull_policy: always makes
+    # every playbook run pick up a moved tag; pin a series again once it settles.
+    image: ghcr.io/bulwarkmail/webmail:latest
+    pull_policy: always
     restart: unless-stopped
     logging:
 {% if ovh_ldp_enabled | default(false) | bool %}

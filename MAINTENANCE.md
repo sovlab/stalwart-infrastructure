@@ -72,7 +72,7 @@ Not automatic, and yours to do:
 | Component | Image | Pinned in |
 |---|---|---|
 | Stalwart | `stalwartlabs/stalwart:v0.16` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
-| Bulwark | `ghcr.io/bulwarkmail/webmail:1.9` | same file |
+| Bulwark | `ghcr.io/bulwarkmail/webmail:latest` (unpinned, `pull_policy: always`) | same file |
 | Caddy | `caddy:2-alpine` (built locally) | `ansible/roles/mailstack/files/Dockerfile.caddy` |
 | stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0` | `stalwart_cli_image` in `group_vars/all.yml` |
 | stalwart-cli (your machine) | `1.0.12` | `mise.toml` |
@@ -80,6 +80,10 @@ Not automatic, and yours to do:
 
 All of these are series tags, not digests, so the upstream tag moves as
 patch releases land. That means two different update paths.
+
+Bulwark is the exception for now: it tracks `latest` with
+`pull_policy: always`, so every playbook run pulls whatever Bulwark last
+released. It will go back to a pinned series once its release pace slows.
 
 ### Patch updates inside a pinned series
 
@@ -90,7 +94,7 @@ an explicit, deliberate step:
 
 ```bash
 cd /data/mailstack
-docker compose pull                  # stalwart + bulwark
+docker compose pull                  # stalwart (bulwark also pulls on every up)
 docker compose build --pull caddy    # refreshes the caddy:2-alpine base
 docker compose up -d                 # recreates only what actually changed
 ```

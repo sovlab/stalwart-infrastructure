@@ -20,8 +20,16 @@
 {{ webmail_hostname }} {
 	reverse_proxy bulwark:{{ bulwark_internal_port }}
 }
+{% if webmail_hostname_aliases %}
 
-{{ mail_hostname }} {
+# Redirected rather than served: Bulwark's OAuth client is registered for
+# the current hostname only, so a sign-in started on an old one fails.
+{{ webmail_hostname_aliases | join(', ') }} {
+	redir https://{{ webmail_hostname }}{uri} permanent
+}
+{% endif %}
+
+{{ ([mail_hostname] + mail_hostname_aliases) | join(', ') }} {
 	import stalwart
 }
 {% if stalwart_web_domains | default([]) %}

@@ -193,7 +193,7 @@
   ansible.builtin.copy:
     content: |
       STALWART_URL=https://{{ mail_hostname }}
-      STALWART_USER={{ stalwart_admin_account }}@{{ domain }}
+      STALWART_USER={{ stalwart_admin_account }}@{{ stalwart_admin_domain }}
       STALWART_PASSWORD={{ stalwart_accounts | selectattr('name', 'eq', stalwart_admin_account) | map(attribute='password') | first }}
     dest: "{{ mailstack_dir }}/.cli.env"
     mode: "0600"

@@ -10,6 +10,15 @@ domain: CHANGEME_DOMAIN.example
 mail_hostname: mail.CHANGEME_DOMAIN.example       # Stalwart: SMTP / IMAP / JMAP / webadmin
 webmail_hostname: webmail.CHANGEME_DOMAIN.example # Bulwark
 
+# Changing domain, mail_hostname or webmail_hostname on a live server is a
+# rename, not a fresh setting: see "Changing the primary domain" in
+# MAINTENANCE.md. In short, pin the two values that name existing objects
+# to the old domain, and keep the old hostnames working as aliases:
+# stalwart_admin_domain: old.example
+# stalwart_dns_server_description: cloudflare old.example
+# mail_hostname_aliases: [mail.old.example]
+# webmail_hostname_aliases: [webmail.old.example]
+
 timezone: UTC
 
 # --- optional OVH Logs Data Platform ---------------------------------------

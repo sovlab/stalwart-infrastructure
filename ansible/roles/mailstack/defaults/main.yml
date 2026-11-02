@@ -4,3 +4,17 @@
 # series tag: this tool runs once, one way, and early 1.0.x releases fixed
 # migrations that reported success while skipping data.
 stalwart_migrate_version: "1.0.5"
+
+# These two follow domain on a fresh install, which is what you want. On a
+# live server they name things that already exist, so once domain changes
+# (a new primary domain) they have to stay pinned to the old value in
+# all.yml: the playbook's admin account keeps its address, and the plan
+# finds its DNS provider by this description, so a new one would make it
+# create a second provider rather than update the first.
+stalwart_admin_domain: "{{ domain }}"
+stalwart_dns_server_description: "cloudflare {{ domain }}"
+
+# Former hostnames kept working after mail_hostname or webmail_hostname
+# changes. Their DNS must still point here.
+mail_hostname_aliases: []
+webmail_hostname_aliases: []

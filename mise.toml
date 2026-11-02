@@ -7,7 +7,7 @@ uv = "latest"
 # not in the Docker image, so it is a local tool here. Pinned to a version
 # rather than "latest": it drives `apply` against a live mail server, and an
 # unannounced change in behaviour is not something to discover mid-playbook.
-"ubi:stalwartlabs/cli" = { version = "1.0.12", exe = "stalwart-cli" }
+"ubi:stalwartlabs/cli" = { version = "1.0.14", exe = "stalwart-cli" }
 
 [env]
 _.python.venv = { path = ".venv", create = true }

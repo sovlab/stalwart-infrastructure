@@ -1,0 +1,35 @@
+# Managed by Ansible - roles/mailstack. Rendered only while this host still
+# has a Stalwart 0.16 store, and removed again once the store is on 1.0.
+# Used by hand, following "Migrating from Stalwart 0.16 to 1.0" in
+# MAINTENANCE.md:
+#
+#   docker compose -f docker-compose.migrate.yml run --rm migrate <command>
+#
+# A separate project rather than a profile in docker-compose.yml, so nothing
+# here can be started or recreated by the playbook's own `up`.
+#
+# The tool opens both stores directly, never through a running server, so
+# it needs no network beyond outbound access to the S3 endpoint. It reads
+# the S3 settings from the 0.16 store itself.
+#
+# The target config.json names /var/lib/stalwart/db, the same path the live
+# server uses, so that after cutover the 1.0 store is simply renamed into
+# {{ data_dir }}/stalwart. Pass --target-path-map to every command that
+# writes the target, so the tool finds it under /var/lib/stalwart-v1 here.
+name: mailstack-migrate
+
+services:
+  migrate:
+    # stalwart-migrate 1.0.4 and 1.0.5 fixed accounts being skipped without
+    # an error, so do not go below 1.0.5. Same uid (2000) as the server
+    # image, which is why the directories below are chowned to it.
+    image: stalwartlabs/stalwart-migrate:{{ stalwart_migrate_version }}
+    volumes:
+      - "{{ data_dir }}/stalwart/etc:/etc/stalwart:ro"
+      - "{{ data_dir }}/stalwart/data:/var/lib/stalwart"
+      - "{{ data_dir }}/stalwart-v1/etc:/etc/stalwart-v1"
+      - "{{ data_dir }}/stalwart-v1/data:/var/lib/stalwart-v1"
+      # Must sit outside both stores. Holds answers.toml, the reports, and
+      # the progress that makes incremental runs resumable. Keep it until
+      # 1.0 has proved itself: rollback needs it.
+      - "{{ data_dir }}/stalwart-migrate:/var/lib/stalwart-migrate"

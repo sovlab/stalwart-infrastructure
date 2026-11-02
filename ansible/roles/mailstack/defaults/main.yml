@@ -1,0 +1,6 @@
+---
+# Only used while a host still has a Stalwart 0.16 store; see
+# templates/docker-compose.migrate.yml.j2. An exact version rather than a
+# series tag: this tool runs once, one way, and early 1.0.x releases fixed
+# migrations that reported success while skipping data.
+stalwart_migrate_version: "1.0.5"

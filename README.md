@@ -276,13 +276,18 @@ and restarts it clean. What remains is confirming it worked:
    and submission (465) fail through it, while the web console on the same
    hostname keeps working — a confusing combination to debug later.
 
-To change configuration afterwards, edit `group_vars/all.yml` and re-run the
-playbook. The plan is built from `upsert` operations, so re-applying
-reconciles what exists rather than duplicating it. Adding an account is
-three lines in `stalwart_accounts`.
+To change infrastructure settings afterwards (Cloudflare token, listeners,
+logging, S3, CORS, proxy networks), edit `group_vars/all.yml` and re-run
+the playbook. That plan is built from `upsert` and singleton `update`
+operations, so re-applying reconciles what exists rather than duplicating
+it.
 
-Removing an entry from `stalwart_accounts` does **not** delete the account.
-Upserts never destroy. Delete accounts in the WebUI.
+The domain and `stalwart_accounts` are a **seed**: applied once, when a
+fresh server is provisioned, and never again. After that, accounts,
+domains, tenants and certificates belong to the WebUI. Editing
+`stalwart_accounts` on a provisioned server changes nothing. The one entry
+to keep in step is `stalwart_admin_account`'s password, which the playbook
+uses to log in.
 
 ## Optional OVH Logs Data Platform forwarding
 

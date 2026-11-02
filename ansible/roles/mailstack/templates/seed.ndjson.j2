@@ -1,0 +1,71 @@
+{# Managed by Ansible - roles/mailstack. Seed plan for `stalwart-cli apply`,
+    applied exactly once: while provisioning a fresh server, concatenated
+    after plan.ndjson so it can reference the DnsServer defined there as
+    #dnsserver-cf. Every later playbook run applies plan.ndjson alone.
+
+    What lives here is what the admin console owns after day one: the
+    primary domain, its ACME provider and the first accounts. Re-applying
+    any of it to a live server does damage rather than reconciling:
+
+      Account       an upsert overwrites every property it carries, and a
+                    list such as `credentials` is replaced whole. Re-applying
+                    deletes app passwords and API keys, drops TOTP, and
+                    resets the password, role and locale to these values.
+      AcmeProvider  Stalwart rewrites `description` to the directory URL and
+                    ACME account id once it registers, so a description
+                    match never finds it again. Every re-apply created a new
+                    provider, registered a new Let's Encrypt account, and
+                    moved the domain onto it.
+      Domain        references the provider above by #acme-le, so it can
+                    only be applied together with it.
+
+    Accounts match on name and domain rather than name alone: the same local
+    part on another domain makes a name-only match ambiguous, and apply then
+    fails without updating anything. #}
+{{ {"@type": "upsert", "object": "AcmeProvider", "matchOn": ["description"], "value": {
+     "acme-le": {
+       "description": "letsencrypt " ~ domain,
+       "challengeType": "Dns01",
+       "contact": {"mailto:postmaster@" ~ domain: true},
+       "renewBefore": "R23",
+       "reuseKey": false}}} | to_json }}
+{{ {"@type": "upsert", "object": "Domain", "matchOn": ["name"], "value": {
+     "domain-primary": {
+       "name": domain,
+       "enable": true,
+       "allowRelaying": false,
+       "reportAddressUri": "mailto:postmaster",
+       "subAddressing": {"@type": "Enabled"},
+       "dnsManagement": {
+         "@type": "Automatic",
+         "dnsServerId": "#dnsserver-cf",
+         "publishRecords": {
+           "dkim": true, "spf": true, "dmarc": true, "srv": true,
+           "mtaSts": true, "tlsRpt": true, "autoConfig": true,
+           "autoConfigLegacy": true, "autoDiscover": true}},
+       "dkimManagement": {
+         "@type": "Automatic",
+         "algorithms": {"Dkim1Ed25519Sha256": true, "Dkim1RsaSha256": true},
+         "selectorTemplate": "v{version}-{algorithm}-{date-%Y%m%d}",
+         "rotateAfter": 7776000000,
+         "retireAfter": 604800000,
+         "deleteAfter": 2592000000},
+       "certificateManagement": {
+         "@type": "Automatic",
+         "subjectAlternativeNames": {},
+         "acmeProviderId": "#acme-le"}}}} | to_json }}
+{% for a in stalwart_accounts %}
+{{ {"@type": "upsert", "object": "Account", "matchOn": ["name", "domainId"], "value": {
+     "account-" ~ a.name: {
+       "@type": "User",
+       "name": a.name,
+       "description": a.description | default(a.name),
+       "domainId": "#domain-primary",
+       "roles": {"@type": a.role | default("User")},
+       "permissions": {"@type": "Inherit"},
+       "locale": (a.locale | default("en-US")) | replace("_", "-"),
+       "encryptionAtRest": {"@type": "Disabled"},
+       "credentials": {"0": {"@type": "Password", "secret": a.password, "allowedIps": {}}}}}} | to_json }}
+{% endfor %}
+{{ {"@type": "update", "object": "SystemSettings", "value": {
+     "defaultDomainId": "#domain-primary"}} | to_json }}

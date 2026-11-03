@@ -18,3 +18,27 @@ stalwart_dns_server_description: "cloudflare {{ domain }}"
 # changes. Their DNS must still point here.
 mail_hostname_aliases: []
 webmail_hostname_aliases: []
+
+# Permissions the built-in admin roles must hold. Stalwart only creates its
+# default roles at first install, so a server upgraded across a release
+# that adds permissions never gets them, and the matching admin console
+# sections stay hidden. Anything listed here that an admin role lacks is
+# granted on the next playbook run. The seeded admin cannot grant
+# permissions it does not hold itself, so that grant runs as the recovery
+# admin; see "New permissions after an upgrade" in MAINTENANCE.md. When a
+# release note asks for permissions to be granted by hand, add them here.
+stalwart_admin_role_permissions:
+  # 1.0.2: Encryption, External Public Keys and S/MIME Trust Anchors
+  - sysEncryptionGet
+  - sysEncryptionUpdate
+  - sysExternalPublicKeyGet
+  - sysExternalPublicKeyCreate
+  - sysExternalPublicKeyUpdate
+  - sysExternalPublicKeyDestroy
+  - sysExternalPublicKeyQuery
+  - sysSmimeTrustAnchorGet
+  - sysSmimeTrustAnchorCreate
+  - sysSmimeTrustAnchorUpdate
+  - sysSmimeTrustAnchorDestroy
+  - sysSmimeTrustAnchorQuery
+  - taskExternalPublicKeyMaintenance

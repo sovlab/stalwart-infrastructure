@@ -1,0 +1,13 @@
+# Managed by Ansible - roles/mailstack. Overlay used only while granting
+# permissions to the built-in admin roles on a running server:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.recovery-admin.yml up -d stalwart
+#
+# Unlike docker-compose.recovery.yml this does not enable recovery mode, so
+# mail keeps flowing. It only adds the recovery admin, which bypasses the
+# permission checks that stop the seeded admin from granting permissions it
+# does not hold. The playbook recreates Stalwart without it straight after.
+services:
+  stalwart:
+    environment:
+      STALWART_RECOVERY_ADMIN: "admin:{{ stalwart_recovery_password }}"

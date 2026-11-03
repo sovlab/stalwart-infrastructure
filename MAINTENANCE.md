@@ -158,6 +158,28 @@ can fail on a newer one outright: 1.0.12 could not read Stalwart 1.0.2's
 schema. The playbook pulls the pinned tag on every run, so changing the
 pin is all it takes.
 
+### New permissions after an upgrade
+
+Stalwart creates its built-in roles once, at first install. When a release
+adds permissions, an upgraded server's System Administrator role does not
+get them, and the console quietly hides whatever they guard. 1.0.2 did
+this with Encryption, External Public Keys and S/MIME Trust Anchors.
+
+The release notes usually say which permissions to grant. Add them to
+`stalwart_admin_role_permissions` in `roles/mailstack/defaults/main.yml`
+and re-run the playbook. It checks every admin role and, only if something
+is missing, grants it.
+
+The seeded admin cannot do the grant itself: Stalwart refuses
+`x:Role/set` for any permission the caller does not hold, with
+`You are not authorized to grant permissions`. So the playbook recreates
+Stalwart with `docker-compose.recovery-admin.yml`, which sets
+`STALWART_RECOVERY_ADMIN` but not recovery mode, grants as `admin` with
+`stalwart_recovery_password`, and recreates Stalwart without it again,
+even if the grant fails. Mail keeps flowing apart from those two
+restarts. Do not delete `.provisioned` to get the recovery admin instead:
+that re-runs the seed and resets every account.
+
 ### Rolling back
 
 Revert the tag in the repo and re-run the playbook. Caddy and Bulwark roll

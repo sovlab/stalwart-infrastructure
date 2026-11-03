@@ -216,6 +216,13 @@
     mode: "0600"   # embeds the recovery admin credential
   no_log: true
 
+- name: Render the recovery-admin compose overlay
+  ansible.builtin.template:
+    src: docker-compose.recovery-admin.yml.j2
+    dest: "{{ mailstack_dir }}/docker-compose.recovery-admin.yml"
+    mode: "0600"   # embeds the recovery admin credential
+  no_log: true
+
 - name: Render Caddyfile
   ansible.builtin.template:
     src: Caddyfile.j2
@@ -346,6 +353,125 @@
   until: stalwart_ready.rc == 0
   retries: 24
   delay: 5
+
+# --- admin role permissions -------------------------------------------
+# Stalwart creates its default roles once, at first install. A release that
+# adds permissions (1.0.2 added the encryption ones) leaves upgraded servers
+# without them, and the admin console hides whatever they guard. The seeded
+# admin cannot fix that itself: Stalwart refuses to let anyone grant a
+# permission they do not hold. So when something is missing, Stalwart is
+# briefly recreated with the recovery admin set, the grant runs as that
+# admin, and Stalwart is recreated again without it. That costs two short
+# restarts, and only on the run that does the grant. This runs before the
+# plan so the plan can configure anything the new permissions guard.
+- name: Read the built-in roles and their permissions
+  ansible.builtin.uri:
+    url: "https://{{ mail_hostname }}/jmap/"
+    method: POST
+    url_username: "{{ stalwart_admin_account }}@{{ stalwart_admin_domain }}"
+    url_password: >-
+      {{ stalwart_accounts | selectattr('name', 'eq', stalwart_admin_account)
+         | map(attribute='password') | first }}
+    force_basic_auth: true
+    body_format: json
+    body:
+      using: ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"]
+      methodCalls:
+        - ["x:Authentication/get", {ids: [singleton], properties: [defaultAdminRoleIds, defaultUserRoleIds]}, auth]
+        - ["x:Role/get", {ids: null}, roles]
+  when: stalwart_provisioned.stat.exists
+  register: stalwart_roles
+  failed_when: >-
+    stalwart_roles.status != 200
+    or 'error' in (stalwart_roles.json.methodResponses | map('first'))
+
+# The admin roles are the ones in defaultAdminRoleIds that are not also
+# user roles; on mail01 that is System Administrator, alongside User.
+- name: Find admin roles missing required permissions
+  ansible.builtin.set_fact:
+    stalwart_roles_to_grant: >-
+      {{ stalwart_roles.json.methodResponses[1][1].list
+         | selectattr('id', 'in', stalwart_admin_role_ids)
+         | rejectattr('enabledPermissions', 'superset', stalwart_admin_role_permissions)
+         | map(attribute='id') | list }}
+  vars:
+    stalwart_auth: "{{ stalwart_roles.json.methodResponses[0][1].list[0] }}"
+    stalwart_admin_role_ids: >-
+      {{ stalwart_auth.defaultAdminRoleIds | list
+         | difference(stalwart_auth.defaultUserRoleIds | default({}) | list) }}
+  when: stalwart_provisioned.stat.exists
+
+- name: Grant missing permissions to the admin roles
+  when:
+    - stalwart_provisioned.stat.exists
+    - stalwart_roles_to_grant | default([]) | length > 0
+  block:
+    - name: Restart Stalwart with the recovery admin
+      ansible.builtin.command:
+        cmd: >-
+          docker compose -f docker-compose.yml -f docker-compose.recovery-admin.yml
+          up -d stalwart
+        chdir: "{{ mailstack_dir }}"
+      changed_when: true
+
+    - name: Wait for Stalwart's management API with the recovery admin
+      ansible.builtin.command:
+        cmd: >-
+          docker run --rm
+          --env-file {{ mailstack_dir }}/.cli.env
+          {{ stalwart_cli_image }} describe
+        chdir: "{{ mailstack_dir }}"
+      register: stalwart_ready_ra
+      changed_when: false
+      until: stalwart_ready_ra.rc == 0
+      retries: 24
+      delay: 5
+
+    # Every listed permission is sent, not only the missing ones: setting
+    # one the role already holds is a no-op, and it keeps the patch simple.
+    - name: Grant the permissions as the recovery admin
+      ansible.builtin.uri:
+        url: "https://{{ mail_hostname }}/jmap/"
+        method: POST
+        url_username: admin
+        url_password: "{{ stalwart_recovery_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          using: ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"]
+          methodCalls:
+            - ["x:Role/set", {update: "{{ dict(stalwart_roles_to_grant | zip([stalwart_role_patch] * (stalwart_roles_to_grant | length))) }}"}, grant]
+      vars:
+        stalwart_role_patch: >-
+          {{ dict(stalwart_admin_role_permissions | map('regex_replace', '^', 'enabledPermissions/')
+                  | zip([true] * (stalwart_admin_role_permissions | length))) }}
+      register: stalwart_grant
+      changed_when: true
+      failed_when: >-
+        stalwart_grant.status != 200
+        or stalwart_grant.json.methodResponses[0][0] == 'error'
+        or (stalwart_grant.json.methodResponses[0][1].updated | default({}) | list | sort)
+           != (stalwart_roles_to_grant | sort)
+
+  always:
+    - name: Restart Stalwart without the recovery admin
+      ansible.builtin.command:
+        cmd: docker compose up -d --force-recreate stalwart
+        chdir: "{{ mailstack_dir }}"
+      changed_when: true
+
+    - name: Wait for Stalwart's management API after the grant
+      ansible.builtin.command:
+        cmd: >-
+          docker run --rm
+          --env-file {{ mailstack_dir }}/.cli.env
+          {{ stalwart_cli_image }} describe
+        chdir: "{{ mailstack_dir }}"
+      register: stalwart_ready_after
+      changed_when: false
+      until: stalwart_ready_after.rc == 0
+      retries: 24
+      delay: 5
 
 # Re-applying against the running server is what makes configuration
 # changes declarative: edit group_vars, re-run the playbook, and the plan

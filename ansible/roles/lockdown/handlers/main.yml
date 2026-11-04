@@ -1,5 +1,27 @@
 ---
-- name: Restart sshd
+# On Ubuntu 24.04+ sshd is socket-activated: ssh.socket owns port 22, and
+# sshd-socket-generator turns ListenAddress into ListenStream at
+# daemon-reload. Restarting ssh.service alone leaves the socket bound to
+# the old addresses, so a ListenAddress change would only land at the next
+# reboot. Rebind the socket first, then restart the service so the rest of
+# the drop-in (PermitRootLogin etc.) is re-read too.
+- name: Check whether sshd is socket-activated
+  ansible.builtin.command: systemctl is-enabled ssh.socket
+  register: ssh_socket_enabled
+  changed_when: false
+  failed_when: false
+  listen: Restart sshd
+
+- name: Regenerate and restart ssh.socket
+  ansible.builtin.systemd:
+    name: ssh.socket
+    state: restarted
+    daemon_reload: true
+  when: ssh_socket_enabled.rc == 0
+  listen: Restart sshd
+
+- name: Restart ssh.service
   ansible.builtin.systemd:
     name: ssh
     state: restarted
+  listen: Restart sshd

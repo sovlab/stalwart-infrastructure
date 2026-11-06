@@ -155,6 +155,14 @@
    deployment, but it is broader than ideal and worth knowing about. #}
 {{ {"@type": "update", "object": "Http", "value": {
      "usePermissiveCors": true}} | to_json }}
+{# uploadQuota and maxUploadCount cap the bytes and files one user can
+   upload per uploadTtl window (1h). The defaults (50 MB, 1000 files)
+   throttle Bulwark's mail import (PST, mbox) to a crawl, since every
+   message is its own upload. With only a handful of trusted users here,
+   both are set high enough to never get in the way. #}
+{{ {"@type": "update", "object": "Jmap", "value": {
+     "uploadQuota": 100000000000,
+     "maxUploadCount": 1000000}} | to_json }}
 {# proxyTrustedNetworks is the fix for the ban loop: without it Stalwart
     takes the TCP peer address as the client address, so every request
     proxied by Caddy looks like it originated from Caddy. Scanner traffic

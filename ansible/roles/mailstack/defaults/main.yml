@@ -42,3 +42,10 @@ stalwart_admin_role_permissions:
   - sysSmimeTrustAnchorDestroy
   - sysSmimeTrustAnchorQuery
   - taskExternalPublicKeyMaintenance
+  # 1.0.3: Symmetric Keys (blob encryption) and the Blob Recode task. A new
+  # install gives no role sysSymmetricKeyDestroy, so it is left out here too.
+  - sysSymmetricKeyGet
+  - sysSymmetricKeyCreate
+  - sysSymmetricKeyUpdate
+  - sysSymmetricKeyQuery
+  - taskBlobRecode

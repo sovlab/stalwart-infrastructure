@@ -78,20 +78,19 @@ Not automatic, and yours to do:
 
 | Component | Image | Pinned in |
 |---|---|---|
-| Stalwart | `stalwartlabs/stalwart:v1.0` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
-| Bulwark | `ghcr.io/bulwarkmail/webmail:latest` (unpinned, `pull_policy: always`) | same file |
+| Stalwart | `stalwartlabs/stalwart:v1.0.3` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
+| Bulwark | `ghcr.io/bulwarkmail/webmail:1.20.0` | same file |
 | Caddy | `caddy:2-alpine` (built locally) | `ansible/roles/mailstack/files/Dockerfile.caddy` |
 | stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0.14` (pulled every run) | `stalwart_cli_image` in `group_vars/all.yml` |
 | stalwart-cli (your machine) | `1.0.14` | `mise.toml` |
 | stalwart-migrate (0.16 hosts only) | `stalwartlabs/stalwart-migrate:1.0.5` | `stalwart_migrate_version` role default |
 | Vector (optional OVH LDP) | `timberio/vector:0.58.0-debian` | `ovh_ldp_vector_image` role default |
 
-All of these are series tags, not digests, so the upstream tag moves as
-patch releases land. That means two different update paths.
-
-Bulwark is the exception for now: it tracks `latest` with
-`pull_policy: always`, so every playbook run pulls whatever Bulwark last
-released. It will go back to a pinned series once its release pace slows.
+Stalwart and Bulwark are pinned to exact releases, so every update to
+them, patch releases included, is a tag change in the repo (see
+[Moving to a new release](#moving-to-a-new-release)). The rest are
+series tags, not digests, so the upstream tag moves as patch releases
+land.
 
 ### Patch updates inside a pinned series
 
@@ -102,7 +101,6 @@ an explicit, deliberate step:
 
 ```bash
 cd /data/mailstack
-docker compose pull                  # stalwart (bulwark also pulls on every up)
 docker compose build --pull caddy    # refreshes the caddy:2-alpine base
 docker compose up -d                 # recreates only what actually changed
 ```
@@ -115,13 +113,13 @@ Then check what you are actually running and that it came back:
 ```bash
 docker compose images
 docker compose ps
-docker compose logs --since 5m stalwart
+docker compose logs --since 5m caddy
 ```
 
-Expect a short interruption. Stalwart is recreated, which drops live IMAP
-and SMTP connections; clients reconnect on their own.
+Expect a short interruption. Caddy is recreated, which briefly drops
+webmail, JMAP and the admin console; mail protocols are not affected.
 
-### Moving to a new minor or major version
+### Moving to a new release
 
 Change the tag in the repo, not on the host:
 
@@ -163,12 +161,22 @@ pin is all it takes.
 Stalwart creates its built-in roles once, at first install. When a release
 adds permissions, an upgraded server's System Administrator role does not
 get them, and the console quietly hides whatever they guard. 1.0.2 did
-this with Encryption, External Public Keys and S/MIME Trust Anchors.
+this with Encryption, External Public Keys and S/MIME Trust Anchors, and
+1.0.3 with Symmetric Keys and the Blob Recode task.
 
-The release notes usually say which permissions to grant. Add them to
-`stalwart_admin_role_permissions` in `roles/mailstack/defaults/main.yml`
-and re-run the playbook. It checks every admin role and, only if something
-is missing, grants it.
+The release notes usually say which permissions to grant. When they don't
+list names, diff `crates/registry/src/schema/enums.rs` between the two
+release tags in the Stalwart repo, and check `DefaultPermissions` in
+`crates/common/src/auth/permissions.rs` for which role a new install gives
+them to. Add the admin ones to `stalwart_admin_role_permissions` in
+`roles/mailstack/defaults/main.yml` and re-run the playbook. It checks
+every admin role and, only if something is missing, grants it.
+
+Since 1.0.3 Stalwart can also do this itself: starting it once with
+`STALWART_UPDATE_ROLE_PERMISSIONS=true` adds to every default role
+(User included, not only admin) whatever a new install would give it. The
+playbook does not use that yet; it would be the way to go if a release
+ever adds permissions to the User role.
 
 The seeded admin cannot do the grant itself: Stalwart refuses
 `x:Role/set` for any permission the caller does not hold, with

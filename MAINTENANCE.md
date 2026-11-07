@@ -78,7 +78,7 @@ Not automatic, and yours to do:
 
 | Component | Image | Pinned in |
 |---|---|---|
-| Stalwart | `stalwartlabs/stalwart:v1.0` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
+| Stalwart | `stalwartlabs/stalwart:v1.0.3` (exact, never downgrade) | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
 | Bulwark | `ghcr.io/bulwarkmail/webmail:latest` (unpinned, `pull_policy: always`) | same file |
 | Caddy | `caddy:2-alpine` (built locally) | `ansible/roles/mailstack/files/Dockerfile.caddy` |
 | stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0.14` (pulled every run) | `stalwart_cli_image` in `group_vars/all.yml` |

@@ -1,27 +1,40 @@
 ---
-# Runs over the Tailscale connection (mailhosts group) - see inventory/hosts.yml.
-# Only ever restricts sshd further; never widens it, so a re-run is safe even
-# if this already applied.
+# Runs over a mesh connection (mailhosts group) - see inventory/hosts.yml.
+# sshd listens on the mesh interfaces only: Tailscale (tailscale0) and NetBird
+# (wt0), whichever are up. Both are bound while we move from Tailscale to
+# NetBird; once tailscale0 is gone it simply drops out of the list.
+# ssh.socket has FreeBind=yes, so binding a mesh address that isn't up yet at
+# boot is fine.
 
-- name: Read tailnet IPv4 address
-  ansible.builtin.command: tailscale ip -4
-  register: ts_ip4
+- name: Read mesh interface addresses
+  ansible.builtin.command: "ip -o addr show dev {{ item }} scope global"
+  loop:
+    - tailscale0
+    - wt0
+  register: mesh_addr_result
   changed_when: false
+  failed_when: false
+  check_mode: false
 
-- name: Read tailnet IPv6 address
-  ansible.builtin.command: tailscale ip -6
-  register: ts_ip6
-  changed_when: false
+- name: Collect mesh addresses
+  ansible.builtin.set_fact:
+    mesh_addresses: >-
+      {{ mesh_addr_result.results
+         | selectattr('rc', 'equalto', 0)
+         | map(attribute='stdout_lines') | flatten
+         | map('split') | map(attribute=3)
+         | map('regex_replace', '/.*$', '')
+         | list }}
 
-- name: Sanity check - confirm we are actually connected over Tailscale
+- name: Sanity check - confirm we are actually connected over a mesh
   ansible.builtin.assert:
     that:
-      - ansible_host == ts_ip4.stdout or ansible_host == ts_ip6.stdout
+      - ansible_host in mesh_addresses
     fail_msg: >-
-      ansible_host ({{ ansible_host }}) does not match this host's Tailscale
-      address ({{ ts_ip4.stdout }} / {{ ts_ip6.stdout }}). Refusing to bind
-      sshd to the tailnet only, to avoid locking out the current connection
-      path. Check inventory/hosts.yml.
+      ansible_host ({{ ansible_host }}) is not one of this host's mesh
+      addresses ({{ mesh_addresses | join(', ') }}). Refusing to bind sshd to
+      the mesh only, to avoid locking out the current connection path. Check
+      inventory/hosts.yml.
 
 - name: Install sshd hardening drop-in
   ansible.builtin.template:

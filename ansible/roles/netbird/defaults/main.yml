@@ -1,0 +1,13 @@
+---
+# Same client version as the rest of the SovLab mesh (mail-shared-platform,
+# roles/netbird_client). Held in apt: upgrade deliberately, by bumping this.
+netbird_version: "0.82.0"
+
+# Always explicit, so the client never falls back to NetBird Cloud.
+netbird_management_url: "https://netbird.pragma.foo"
+netbird_hostname: "{{ inventory_hostname }}"
+
+# Only needed for the first enrollment. The key comes from the hub's OpenTofu
+# (mail-shared-platform: tofu output -raw netbird_setup_key_mail01) and puts
+# the peer in the NetBird group `mail01`.
+netbird_setup_key: "{{ lookup('ansible.builtin.env', 'NETBIRD_SETUP_KEY') }}"

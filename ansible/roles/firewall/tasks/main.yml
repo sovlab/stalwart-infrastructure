@@ -21,12 +21,17 @@
     - { direction: incoming, policy: deny }
     - { direction: outgoing, policy: allow }
 
-- name: Allow SSH on the Tailscale interface only
+# Tailscale and NetBird both, while we switch from one to the other. NetBird
+# policies decide which peers get here (operators and the hub).
+- name: Allow SSH on the mesh interfaces only
   community.general.ufw:
     rule: allow
-    interface_in: tailscale0
+    interface_in: "{{ item }}"
     port: "22"
     proto: tcp
+  loop:
+    - tailscale0
+    - wt0
 
 # ufw must be active before ufw-docker (and the route-allow rules below)
 # can inspect/patch it - the SSH rule above is already in the ruleset by

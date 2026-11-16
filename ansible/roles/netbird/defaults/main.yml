@@ -4,7 +4,9 @@
 netbird_version: "0.82.0"
 
 # Always explicit, so the client never falls back to NetBird Cloud.
-netbird_management_url: "https://netbird.pragma.foo"
+# netbird.pragma.foo stays routed until every peer has moved (early 2027 at
+# the latest); this role re-points an enrolled peer when this changes.
+netbird_management_url: "https://netbird.sovlab.ca"
 netbird_hostname: "{{ inventory_hostname }}"
 
 # Only needed for the first enrollment. The key comes from the hub's OpenTofu

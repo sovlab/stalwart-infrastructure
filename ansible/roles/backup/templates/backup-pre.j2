@@ -1,0 +1,26 @@
+#!/bin/bash
+# Managed by Ansible - roles/backup. Runs before each restic backup.
+#
+# A copy of a running RocksDB store can be internally inconsistent in ways
+# that only show up on restore, so Stalwart is stopped while its store is
+# copied to the staging directory, then started again. rsync only moves what
+# changed since last night (RocksDB's SST files are immutable), which keeps
+# the outage to seconds. Other MTAs retry delivery during it.
+set -euo pipefail
+umask 077
+
+SRC={{ data_dir }}/stalwart/data/
+DST={{ backup_staging_dir }}/data/
+
+mkdir -p "$DST"
+cd {{ mailstack_dir }}
+
+started=$(date +%s)
+docker compose stop stalwart
+# Whatever happens from here, Stalwart comes back up.
+trap 'docker compose start stalwart' EXIT
+rsync -a --delete "$SRC" "$DST"
+docker compose start stalwart
+trap - EXIT
+
+echo "backup-pre: stalwart store copied cold ($(du -sh "$DST" | cut -f1)), stalwart down $(( $(date +%s) - started ))s"

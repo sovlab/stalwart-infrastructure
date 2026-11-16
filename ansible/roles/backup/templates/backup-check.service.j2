@@ -1,0 +1,12 @@
+# Managed by Ansible - roles/backup.
+[Unit]
+Description=Weekly restic repository check and report
+Wants=network-online.target
+After=network-online.target
+OnFailure=backup-notify@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rp check
+ExecStartPost=/usr/local/sbin/backup-notify report
+TimeoutStartSec=4h

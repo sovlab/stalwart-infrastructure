@@ -1,0 +1,12 @@
+# Managed by Ansible - roles/backup.
+[Unit]
+Description=Nightly restic backup (resticprofile)
+Wants=network-online.target
+After=network-online.target docker.service
+OnFailure=backup-notify@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rp backup
+ExecStartPost=/usr/local/sbin/backup-notify success
+TimeoutStartSec=4h

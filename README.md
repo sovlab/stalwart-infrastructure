@@ -50,16 +50,16 @@ Working today:
   over ACME
 - Declarative Stalwart configuration: domain, accounts, ACME and DNS
   provider all applied from version-controlled variables
+- Optional nightly backups with restic to S3-compatible storage: a cold
+  copy of the RocksDB store (a few seconds of downtime), encrypted and
+  deduplicated, with failure alerts and a weekly integrity report by email
+  and Mattermost
 
 Stalwart is provisioned declaratively from `group_vars/all.yml`: the
 playbook renders its data store config and a `stalwart-cli` plan, applies
 them in recovery mode, and restarts clean. No setup wizard, and a rebuilt
 VPS converges to the same state. DNS records and TLS renewal are Stalwart's
 own job once it has the Cloudflare token, so neither is a standing chore.
-
-Not yet built:
-
-- Backups
 
 ## Architecture
 
@@ -303,7 +303,8 @@ diagnosing mail that will not deliver, backups, break-glass) are in
 [MAINTENANCE.md](MAINTENANCE.md).
 
 The short version: OS patching and TLS renewal look after themselves,
-container image updates and backups do not.
+container image updates do not. Backups run nightly once enabled, but
+restoring is a drill worth practising.
 
 ## Security model
 
@@ -355,7 +356,6 @@ The long-term plan (an elastic, Kubernetes-based infrastructure sized for
 up to 1M mailboxes) is in [ROADMAP.md](ROADMAP.md). Closer to home, for
 the single-host setup:
 
-- Backups of the RocksDB directory (message bodies are already in S3)
 - Optionally isolating the admin console to the tailnet again, properly
   this time (real HTTPS via Cloudflare DNS-01 ACME, since the console's
   hostname wouldn't be publicly routable) - dropped for now in favor of

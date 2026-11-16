@@ -1,0 +1,85 @@
+#!/bin/bash
+# Managed by Ansible - roles/backup.
+#   backup-notify success          after backup.service succeeds (Mattermost only)
+#   backup-notify failure <unit>   sent by backup-notify@.service (OnFailure=)
+#   backup-notify report           weekly, after a successful repository check
+# Failures and reports are emailed and, when a webhook is configured, posted
+# to Mattermost. The two are each other's fallback: mail goes through this
+# host's own Stalwart, which is the thing a failed backup may have broken.
+set -euo pipefail
+
+MAILTO={{ backup_mailto | quote }}
+MAILFROM={{ backup_mail_from | quote }}
+HOST=$(hostname -s)
+MATTERMOST_WEBHOOK=
+# shellcheck disable=SC1091
+[ -f /etc/resticprofile/notify.env ] && . /etc/resticprofile/notify.env
+
+send_mail() {
+    local subject=$1
+    { printf 'From: %s backups <%s>\nTo: %s\nSubject: %s\nContent-Type: text/plain; charset=utf-8\n\n' \
+        "$HOST" "$MAILFROM" "$MAILTO" "$subject"; cat; } | msmtp "$MAILTO" \
+        || echo "backup-notify: email failed" >&2
+}
+
+# Post markdown from stdin. Never fails the caller.
+post_mattermost() {
+    [ -n "$MATTERMOST_WEBHOOK" ] || return 0
+    python3 -c 'import json, sys; print(json.dumps({"username": sys.argv[1], "text": sys.stdin.read()[:15000]}))' \
+        "$HOST backups" \
+        | curl -fsS --max-time 20 -H 'Content-Type: application/json' --data-binary @- "$MATTERMOST_WEBHOOK" >/dev/null \
+        || echo "backup-notify: Mattermost post failed" >&2
+}
+
+last_run() {
+    journalctl -u backup.service --no-pager -n 300 -o cat \
+        | grep -E 'Added to the repository|processed|snapshot .* saved|backup-pre' | tail -4 || true
+}
+
+case ${1:-} in
+success)
+    added=$(last_run | sed -n 's/^Added to the repository: //p' | tail -1)
+    snap=$(last_run | sed -n 's/^snapshot \([0-9a-f]*\) saved$/\1/p' | tail -1)
+    files=$(last_run | sed -n 's/^processed \(.*\)$/\1/p' | tail -1)
+    down=$(last_run | sed -n 's/.*stalwart down \([0-9]*s\).*/\1/p' | tail -1)
+    printf ':white_check_mark: **%s** backup OK: snapshot `%s`, %s, uploaded %s, stalwart down %s\n' \
+        "$HOST" "${snap:-?}" "${files:-?}" "${added:-?}" "${down:-?}" | post_mattermost
+    ;;
+failure)
+    unit=${2:?unit name required}
+    log=$(journalctl -u "$unit" --no-pager -n 80 -o short-iso || true)
+    printf ':rotating_light: **%s: %s FAILED** at %s\n```\n%s\n```\n' \
+        "$HOST" "$unit" "$(date -u '+%F %T UTC')" "$(tail -30 <<<"$log")" | post_mattermost
+    {
+        echo "$unit failed on $HOST at $(date -u '+%F %T UTC')."
+        echo
+        systemctl status --no-pager --lines=0 "$unit" || true
+        echo
+        echo "Last log lines:"
+        echo "$log"
+    } | send_mail "[$HOST] BACKUP FAILED: $unit"
+    ;;
+report)
+    # Drop resticprofile's own timestamped log lines.
+    snapshots=$(/usr/local/sbin/rp snapshots --compact 2>&1 | grep -vE '^[0-9]{4}/[0-9]{2}/[0-9]{2} ' || true)
+    stats=$(/usr/local/sbin/rp stats --mode raw-data 2>&1 | grep -E 'Total' || true)
+    body=$(
+        echo "Weekly backup report for $HOST, $(date -u '+%F %T UTC')."
+        echo "Repository integrity check passed ({{ backup_check_read_data_subset }} of data re-read)."
+        echo
+        echo "Snapshots:"
+        echo "$snapshots"
+        echo
+        echo "$stats"
+        echo
+        echo "Last backup run:"
+        last_run
+    )
+    printf ':bar_chart: **%s weekly backup report**: integrity check passed\n```\n%s\n```\n' "$HOST" "$body" | post_mattermost
+    echo "$body" | send_mail "[$HOST] weekly backup report: OK"
+    ;;
+*)
+    echo "usage: backup-notify success | failure <unit> | report" >&2
+    exit 2
+    ;;
+esac

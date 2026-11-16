@@ -112,6 +112,23 @@ s3_key_prefix: ""     # optional, leave empty for none
 s3_access_key: "{{ lookup('ansible.builtin.env', 'S3_ACCESS_KEY') }}"
 s3_secret_key: "{{ lookup('ansible.builtin.env', 'S3_SECRET_KEY') }}"
 
+# --- backups ----------------------------------------------------------------
+# Nightly restic backups to S3-compatible storage, see "Backups" in
+# MAINTENANCE.md. Stalwart is stopped for a few seconds each night while its
+# RocksDB store is copied; message bodies are not copied, they are already in
+# s3_bucket. Keep the S3 key, restic password, SMTP password and webhook in
+# .env (BACKUP_*). Store the restic password in a password manager too:
+# without it the backups cannot be decrypted.
+backup_enabled: false
+# A separate bucket from s3_bucket, one prefix per host.
+backup_repository: "s3:https://s3.{{ s3_region }}.io.cloud.ovh.net/CHANGEME_BACKUP_BUCKET/{{ inventory_hostname }}"
+# Failures and a weekly report are emailed here, sent through this server as
+# backup_mail_from (an account that exists in Stalwart).
+backup_mailto: CHANGEME_YOU@example.com
+backup_mail_from: noreply@CHANGEME_DOMAIN.example
+# Defaults: daily at 02:30, weekly check Sunday 05:30 (host time), keep 7
+# daily, 4 weekly and 6 monthly snapshots. See roles/backup/defaults.
+
 # --- mail stack ---------------------------------------------------------
 
 bulwark_internal_port: 3000

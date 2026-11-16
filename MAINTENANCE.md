@@ -67,7 +67,8 @@ Not automatic, and yours to do:
 
 - **Container image updates.** Nothing pulls new images on its own, by
   design. See below.
-- **Backups.** Still unbuilt, see [Backups](#backups-not-built-yet).
+- **Backups.** Automatic once `backup_enabled` is on, but read the weekly
+  report and run a restore drill now and then. See [Backups](#backups).
 - Non-security OS updates (kernel HWE jumps, release upgrades).
 - Renewing the Cloudflare API token and keeping the Tailscale node from
   expiring, both of which break things quietly months later.
@@ -138,7 +139,8 @@ For Stalwart specifically, do three things first:
    derived from a `stalwart-cli snapshot` of one specific version; a renamed field or a
    changed enum variant surfaces as an `apply` failure mid-playbook, and
    occasionally as a setting silently reverting to its default.
-2. Take a backup (see below). A data-store migration is one-way.
+2. Take a backup with `sudo rp backup` (see [Backups](#backups)). A
+   data-store migration is one-way.
 3. Take a configuration snapshot so you can diff the schema afterwards:
    ```bash
    stalwart-cli --url https://mail.example.com --user admin@example.com \
@@ -978,50 +980,100 @@ console, and confirm occasionally:
 tailscale status
 ```
 
-## Backups, not built yet
+## Backups
 
-There is no backup automation in this repo. Until there is, this is the
-manual version.
+`roles/backup` runs nightly restic backups to S3-compatible storage when
+`backup_enabled` is true. Settings are under "backups" in
+`group_vars/all.yml.example`, secrets are the `BACKUP_*` entries in `.env`.
 
-What actually needs backing up:
+What gets backed up, and why:
 
 - **`/data/stalwart/data`**, the RocksDB store. Metadata, mailbox
   structure, indexes, the TLS certificate, the ACME account key and the
   DKIM private keys. Message bodies are in S3, but this directory is what
   maps them to mailboxes. Without it, the bucket is unreadable noise.
-- **The S3 bucket**, which is your provider's problem. Versioning is on,
-  which is what makes a RocksDB copy and the bucket line up: Stalwart's
-  daily blob cleanup (04:00) deletes blobs nothing references any more,
-  and without versioning a store restored from yesterday would point at
-  bodies that are already gone. Confirm how long noncurrent versions are
-  kept, since that is the real limit on how old a usable backup can be.
-- **`ansible/inventory/group_vars/all.yml` and `.env`.** Both gitignored,
-  both carrying every password in this deployment. A password manager is
-  the right place, not a second copy on the same VPS.
+- **`/data/stalwart/etc`, `/data/bulwark`, `/data/caddy/data` and
+  `/data/mailstack`.** Small, and quicker to restore than to re-render.
+- **The S3 bucket** is not copied: it is your provider's problem.
+  Versioning is on, which is what makes a RocksDB copy and the bucket line
+  up: Stalwart's daily blob cleanup (04:00) deletes blobs nothing references
+  any more, and without versioning a store restored from yesterday would
+  point at bodies that are already gone. How long noncurrent versions are
+  kept is the real limit on how old a usable backup can be, whatever the
+  restic retention says.
+- **`ansible/inventory/group_vars/all.yml` and `.env`** are not on the
+  server. Both carry every password in this deployment, including the
+  restic password: a password manager is the right place for them.
 
-`/data/stalwart/etc/config.json` does not need a backup, the playbook
-re-renders it.
+### How it runs
 
-Cold copy, which is the only kind worth trusting for RocksDB:
+`backup.timer` starts `backup.service` daily (02:30 host time by default):
+
+1. `/usr/local/sbin/backup-pre` stops Stalwart, rsyncs the RocksDB store to
+   `/var/backups/stalwart/data`, and starts Stalwart again, whatever
+   happens in between. A tar or snapshot of a running RocksDB can be
+   internally inconsistent in ways that only show up when you restore it,
+   so the copy is always cold. rsync only moves changed files, so the
+   outage is seconds; other MTAs retry delivery during it.
+2. restic backs up the staging copy and the paths above, encrypted and
+   deduplicated, then applies retention (7 daily, 4 weekly, 6 monthly).
+
+`backup-check.timer` runs `restic check` every Sunday, re-reading 5% of the
+stored data, and then sends the weekly report.
+
+Notifications (`/usr/local/sbin/backup-notify`):
+
+| Event | Email (`backup_mailto`) | Mattermost (if webhook set) |
+|---|---|---|
+| Nightly backup OK | | one line with snapshot, size, Stalwart downtime |
+| Backup or check failed | yes, with the last log lines | yes |
+| Weekly check passed | report | report |
+
+Mail goes out through this server's own Stalwart, which is exactly what a
+failed backup may have left stopped; that is what the Mattermost channel is
+for. Silence is also a signal: no weekly report on a Sunday, or no nightly
+line in Mattermost, means look.
+
+### Day to day
+
+`rp` is resticprofile with the credentials loaded:
 
 ```bash
-cd /data/mailstack
-docker compose stop stalwart
-sudo tar -C /data/stalwart -czf /root/stalwart-$(date +%F).tar.gz data etc
+sudo rp snapshots                     # what is in the repository
+sudo rp backup                        # back up now (stops Stalwart briefly)
+sudo systemctl start backup.service   # same, with notifications
+systemctl list-timers 'backup*'
+journalctl -u backup.service -n 50
+```
+
+### Restoring
+
+Practise this before you need it. On the same or a rebuilt host (run the
+playbooks as normal first):
+
+```bash
+sudo rp restore latest --target /root/restore
+cd /data/mailstack && docker compose stop stalwart
+sudo rsync -a --delete /root/restore/var/backups/stalwart/data/ /data/stalwart/data/
+sudo chown -R 2000:2000 /data/stalwart/data
 docker compose start stalwart
 ```
 
-Then get the tarball off the box. A tar of a running RocksDB can be
-internally inconsistent in ways that only show up when you restore it,
-which is the worst possible time to find out.
+Use a snapshot ID instead of `latest` to go further back, within the
+bucket's noncurrent-version retention. Restoring keeps the existing DKIM
+keys and certificate, so nothing needs republishing. Other directories
+restore the same way, from `/root/restore/<original path>`.
 
-To restore onto a rebuilt host: run the playbooks as normal, then stop the
-stack, replace `/data/stalwart/data` with the backup (preserving
-`2000:2000` ownership), and start it. Restoring keeps the existing DKIM
-keys and certificate, so nothing needs republishing.
+A drill that does not touch production: `sudo rp restore latest --target
+/root/drill`, check the store and config are there and sized as expected,
+then delete it. Do not start a second Stalwart on a restored copy: its
+config points at the production bucket, and its blob cleanup would delete
+bodies the live server still uses. A full drill means a scratch VPS whose
+Stalwart gets a read-only key to the bucket, so any delete it attempts
+fails.
 
 A backup only restores onto the Stalwart version that wrote it. A 0.16
-tarball is not a way back from 1.0 once 1.0 has served mail; see
+backup is not a way back from 1.0 once 1.0 has served mail; see
 [Rolling back](#rolling-back-the-migration) in the migration section.
 
 A from-scratch rebuild with no backup also works, in the sense that

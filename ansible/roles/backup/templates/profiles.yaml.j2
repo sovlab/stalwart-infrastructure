@@ -1,0 +1,33 @@
+# Managed by Ansible - roles/backup. Run it through /usr/local/sbin/rp, which
+# loads the S3 credentials from s3.env.
+version: "1"
+
+global:
+  priority: low
+  ionice: true
+  ionice-class: 3
+  restic-lock-retry-after: 1m
+
+default:
+  repository: "{{ backup_repository }}"
+  password-file: /etc/resticprofile/restic-password
+
+  backup:
+    # Stops Stalwart, copies its RocksDB store to {{ backup_staging_dir }}, starts it again.
+    run-before: /usr/local/sbin/backup-pre
+    exclude-caches: true
+    source:
+      - {{ backup_staging_dir }}
+{% for path in backup_paths %}
+      - {{ path }}
+{% endfor %}
+
+  retention:
+    after-backup: true
+    keep-daily: {{ backup_keep_daily }}
+    keep-weekly: {{ backup_keep_weekly }}
+    keep-monthly: {{ backup_keep_monthly }}
+    prune: true
+
+  check:
+    read-data-subset: {{ backup_check_read_data_subset }}

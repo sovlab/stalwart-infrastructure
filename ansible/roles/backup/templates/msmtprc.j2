@@ -1,0 +1,16 @@
+# Managed by Ansible - roles/backup. Outgoing mail for backup notifications.
+defaults
+auth on
+tls on
+tls_starttls off
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+syslog LOG_MAIL
+
+account backup
+host {{ backup_smtp_host }}
+port {{ backup_smtp_port }}
+from {{ backup_mail_from }}
+user {{ backup_smtp_user }}
+password {{ backup_smtp_password }}
+
+account default : backup

@@ -1,0 +1,10 @@
+#!/bin/bash
+# Managed by Ansible - roles/backup. resticprofile with the S3 credentials
+# loaded. Usage: sudo rp snapshots, sudo rp backup,
+# sudo rp restore latest --target /tmp/restore, ...
+set -euo pipefail
+set -a
+# shellcheck disable=SC1091
+[ -f /etc/resticprofile/s3.env ] && . /etc/resticprofile/s3.env
+set +a
+exec /usr/local/bin/resticprofile --config /etc/resticprofile/profiles.yaml "$@"

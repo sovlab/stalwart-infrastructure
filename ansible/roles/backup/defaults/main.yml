@@ -1,0 +1,60 @@
+---
+# Nightly encrypted backups with restic, driven by resticprofile and systemd
+# timers. Disabled everywhere unless a deployment explicitly opts in.
+backup_enabled: false
+
+# One restic repository per host. A bucket shared between hosts works, with
+# one prefix each:
+#   s3:https://s3.bhs.io.cloud.ovh.net/<bucket>/{{ inventory_hostname }}
+# Use a different bucket from s3_bucket: that one holds Stalwart's message
+# bodies and has its own lifecycle.
+backup_repository: ""
+backup_s3_region: "{{ s3_region }}"
+
+# Keep these three in .env. The restic password encrypts the repository and
+# is needed to restore: keep a copy in a password manager, since a lost
+# password means unreadable backups.
+backup_s3_access_key: "{{ lookup('ansible.builtin.env', 'BACKUP_S3_ACCESS_KEY') }}"
+backup_s3_secret_key: "{{ lookup('ansible.builtin.env', 'BACKUP_S3_SECRET_KEY') }}"
+backup_restic_password: "{{ lookup('ansible.builtin.env', 'BACKUP_RESTIC_PASSWORD') }}"
+
+# Host time (see timezone in group_vars). Before the 03:30 unattended-upgrades
+# reboot and before Stalwart's 04:00 blob cleanup, so the RocksDB copy and the
+# bucket are as close as they get.
+backup_schedule: "*-*-* 02:30:00"
+backup_check_schedule: "Sun *-*-* 05:30:00"
+
+backup_keep_daily: 7
+backup_keep_weekly: 4
+backup_keep_monthly: 6
+# Share of the stored data the weekly check downloads and verifies.
+backup_check_read_data_subset: "5%"
+
+# Stalwart is stopped for the cold copy of its RocksDB store. The copy goes
+# here first (rsync, so only changed files move and the outage stays short),
+# and restic reads it after Stalwart is back up.
+backup_staging_dir: /var/backups/stalwart
+
+# Anything else worth keeping, in addition to the Stalwart store.
+backup_paths:
+  - "{{ data_dir }}/stalwart/etc"
+  - "{{ data_dir }}/stalwart/.store-v1"
+  - "{{ data_dir }}/bulwark"
+  - "{{ data_dir }}/caddy/data"
+  - "{{ mailstack_dir }}"
+
+# --- notifications ----------------------------------------------------------
+# Failures and the weekly report are emailed through msmtp. If
+# backup_mattermost_webhook is set, they are also posted there, along with a
+# one-line success message after every nightly backup.
+backup_mailto: ""
+backup_mail_from: ""
+backup_smtp_host: "{{ mail_hostname }}"
+backup_smtp_port: 465
+backup_smtp_user: "{{ backup_mail_from }}"
+backup_smtp_password: "{{ lookup('ansible.builtin.env', 'BACKUP_SMTP_PASSWORD') }}"
+backup_mattermost_webhook: "{{ lookup('ansible.builtin.env', 'BACKUP_MATTERMOST_WEBHOOK') }}"
+
+# The build without self-update: upgrades go through this pin, not the binary.
+resticprofile_version: "0.33.1"
+resticprofile_sha256: 1d7027d15e3e2456e585a210f811d0f72ec40f6b3388f00425642ed579165d70

@@ -78,8 +78,8 @@ Not automatic, and yours to do:
 
 | Component | Image | Pinned in |
 |---|---|---|
-| Stalwart | `stalwartlabs/stalwart:v1.0.3` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
-| Bulwark | `ghcr.io/bulwarkmail/webmail:1.20.0` | same file |
+| Stalwart | `stalwartlabs/stalwart:v1.1.1` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
+| Bulwark | `ghcr.io/bulwarkmail/webmail:1.21.2` | same file |
 | Caddy | `caddy:2-alpine` (built locally) | `ansible/roles/mailstack/files/Dockerfile.caddy` |
 | stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0.14` (pulled every run) | `stalwart_cli_image` in `group_vars/all.yml` |
 | stalwart-cli (your machine) | `1.0.14` | `mise.toml` |
@@ -175,8 +175,20 @@ every admin role and, only if something is missing, grants it.
 Since 1.0.3 Stalwart can also do this itself: starting it once with
 `STALWART_UPDATE_ROLE_PERMISSIONS=true` adds to every default role
 (User included, not only admin) whatever a new install would give it. The
-playbook does not use that yet; it would be the way to go if a release
-ever adds permissions to the User role.
+playbook does not use that yet. 1.1.0 was the first release to add User
+permissions (the `sysPasskey*` ones), and mail01 got them by a one-off
+start with a temporary overlay:
+
+```bash
+cd /data/mailstack
+printf 'services:\n  stalwart:\n    environment:\n      STALWART_UPDATE_ROLE_PERMISSIONS: "true"\n' \
+  | sudo tee docker-compose.update-perms.yml
+sudo docker compose -f docker-compose.yml -f docker-compose.update-perms.yml up -d stalwart
+sudo docker compose up -d stalwart && sudo rm docker-compose.update-perms.yml
+```
+
+Any other host upgraded from 1.0.x needs the same, or its users cannot
+register passkeys.
 
 The seeded admin cannot do the grant itself: Stalwart refuses
 `x:Role/set` for any permission the caller does not hold, with

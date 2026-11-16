@@ -49,3 +49,10 @@ stalwart_admin_role_permissions:
   - sysSymmetricKeyUpdate
   - sysSymmetricKeyQuery
   - taskBlobRecode
+  # 1.1.0: Passkeys. A new install also gives these to the User role, which
+  # this list does not cover; see "New permissions after an upgrade".
+  - sysPasskeyGet
+  - sysPasskeyCreate
+  - sysPasskeyUpdate
+  - sysPasskeyDestroy
+  - sysPasskeyQuery

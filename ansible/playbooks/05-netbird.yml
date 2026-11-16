@@ -1,0 +1,15 @@
+---
+# Join the SovLab NetBird mesh and open SSH on wt0 next to Tailscale:
+#   NETBIRD_SETUP_KEY=... ansible-playbook playbooks/05-netbird.yml
+#
+# Touches only NetBird, sshd's listen addresses and the SSH firewall rules,
+# not the mail stack. 10-site.yml runs the same roles, so either keeps it in
+# place afterwards. The setup key is only needed until the host is enrolled.
+- name: Join NetBird and allow SSH over it
+  hosts: mailhosts
+  become: true
+  gather_facts: true
+  roles:
+    - netbird
+    - lockdown
+    - firewall

@@ -1,8 +1,9 @@
 # Managed by Ansible - roles/lockdown
-# Binds sshd to the Tailscale interface only; the public interface no
-# longer accepts SSH at all.
-ListenAddress {{ ts_ip4.stdout }}
-ListenAddress {{ ts_ip6.stdout }}
+# Binds sshd to the mesh interfaces only (Tailscale and/or NetBird); the
+# public interface no longer accepts SSH at all.
+{% for addr in mesh_addresses %}
+ListenAddress {{ addr }}
+{% endfor %}
 
 PermitRootLogin no
 PasswordAuthentication no

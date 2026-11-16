@@ -1,0 +1,72 @@
+---
+# Joins the SovLab NetBird mesh, alongside Tailscale while we switch over.
+- name: Add NetBird apt signing key
+  ansible.builtin.get_url:
+    url: https://pkgs.netbird.io/debian/public.key
+    dest: /usr/share/keyrings/netbird-archive-keyring.asc
+    mode: "0644"
+
+- name: Add NetBird apt repository
+  ansible.builtin.deb822_repository:
+    name: netbird
+    types: [deb]
+    uris: https://pkgs.netbird.io/debian
+    suites: [stable]
+    components: [main]
+    signed_by: /usr/share/keyrings/netbird-archive-keyring.asc
+
+- name: Install the NetBird client (pinned)
+  ansible.builtin.apt:
+    name: "netbird={{ netbird_version }}"
+    update_cache: true
+    allow_change_held_packages: true
+
+- name: Hold the NetBird client version
+  ansible.builtin.dpkg_selections:
+    name: netbird
+    selection: hold
+
+- name: Enable and start the NetBird service
+  ansible.builtin.systemd:
+    name: netbird
+    enabled: true
+    state: started
+
+- name: Check current NetBird status
+  ansible.builtin.command: netbird status
+  register: netbird_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Fail early if NETBIRD_SETUP_KEY is needed but not set
+  ansible.builtin.assert:
+    that:
+      - netbird_setup_key | length > 0
+    fail_msg: >-
+      This host isn't enrolled yet and NETBIRD_SETUP_KEY is empty. Get it from
+      mail-shared-platform (tofu -chdir=tofu/envs/hub output -raw
+      netbird_setup_key_mail01) and export it for this run.
+  when: "'Management: Connected' not in netbird_status.stdout"
+
+- name: Join the mesh
+  ansible.builtin.command: >-
+    netbird up
+    --management-url {{ netbird_management_url }}
+    --setup-key {{ netbird_setup_key }}
+    --hostname {{ netbird_hostname }}
+  when: "'Management: Connected' not in netbird_status.stdout"
+  no_log: true
+  changed_when: true
+
+- name: Wait for the wt0 address
+  ansible.builtin.command: ip -4 -o addr show dev wt0
+  register: netbird_wt0
+  until: netbird_wt0.rc == 0 and 'inet ' in netbird_wt0.stdout
+  retries: 15
+  delay: 2
+  changed_when: false
+
+- name: Show the NetBird IP
+  ansible.builtin.debug:
+    msg: "NetBird IPv4 for this host is {{ netbird_wt0.stdout.split()[3].split('/')[0] }}."

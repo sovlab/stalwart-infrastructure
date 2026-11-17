@@ -79,10 +79,14 @@
     - netbird_current_host != netbird_wanted_host
   vars:
     netbird_current_host: >-
-      {{ (netbird_status_json.stdout | from_json).management.url | urlsplit('hostname')
-         if (netbird_status_json.stdout | default('')) is match('\s*{') else '' }}
+      {{ ((netbird_status_json.stdout | default('{}') | from_json).management | default({})).url | default('')
+         | urlsplit('hostname') if (netbird_status_json.stdout | default('')) is match('\s*{') else '' }}
     netbird_wanted_host: "{{ netbird_management_url | urlsplit('hostname') }}"
   block:
+    - name: Management URL to move
+      ansible.builtin.debug:
+        msg: "{{ netbird_current_host }} -> {{ netbird_wanted_host }}{{ ' (check mode: not moved)' if ansible_check_mode else '' }}"
+
     - name: Re-point (detached, falls back to the old URL)
       ansible.builtin.command:
         argv:
@@ -101,10 +105,12 @@
             netbird down; netbird up --management-url https://{{ netbird_current_host }}; exit 1
       changed_when: true
 
+    # Check mode skips the re-point, so there is nothing to wait for or verify.
     - name: Wait for the connection to come back
       ansible.builtin.wait_for_connection:
         delay: 15
         timeout: 180
+      when: not ansible_check_mode
 
     - name: Check the management URL after the move
       ansible.builtin.command: netbird status --json
@@ -115,6 +121,7 @@
       until: >-
         (netbird_after.stdout | from_json).management.connected
         and netbird_wanted_host in (netbird_after.stdout | from_json).management.url
+      when: not ansible_check_mode
 
 - name: Wait for the wt0 address
   ansible.builtin.command: ip -4 -o addr show dev wt0

@@ -79,11 +79,11 @@ Not automatic, and yours to do:
 
 | Component | Image | Pinned in |
 |---|---|---|
-| Stalwart | `stalwartlabs/stalwart:v1.1.1` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
+| Stalwart | `stalwartlabs/stalwart:v1.2.1` | `ansible/roles/mailstack/templates/docker-compose.yml.j2` |
 | Bulwark | `ghcr.io/bulwarkmail/webmail:1.22.0` | same file |
 | Caddy | `caddy:2-alpine` (built locally) | `ansible/roles/mailstack/files/Dockerfile.caddy` |
-| stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:1.0.14` (pulled every run) | `stalwart_cli_image` in `group_vars/all.yml` |
-| stalwart-cli (your machine) | `1.0.14` | `mise.toml` |
+| stalwart-cli (container) | `ghcr.io/stalwartlabs/cli:2.0.0` (pulled every run) | `stalwart_cli_image` in `group_vars/all.yml` |
+| stalwart-cli (your machine) | `2.0.0` | `mise.toml` |
 | stalwart-migrate (0.16 hosts only) | `stalwartlabs/stalwart-migrate:1.0.5` | `stalwart_migrate_version` role default |
 | Vector (optional OVH LDP) | `timberio/vector:0.58.0-debian` | `ovh_ldp_vector_image` role default |
 
@@ -192,6 +192,14 @@ sudo docker compose up -d stalwart && sudo rm docker-compose.update-perms.yml
 Any other host upgraded from 1.0.x needs the same, or its users cannot
 register passkeys.
 
+1.2.0 did it again: mail rules, blocked and safe senders, and calendar
+settings (`sysMailRule*`, `sysBlockedSender*`, `sysSafeSender*`,
+`sysCalendarSettings*`) go to the User role too, and the admin role also
+gets `sysExchangeGet`/`sysExchangeUpdate`. The playbook grants the admin
+ones; every host upgraded from 1.1.x needs the same one-off overlay start
+above for the User role, or users cannot manage filters, the auto-reply or
+their junk lists.
+
 The seeded admin cannot do the grant itself: Stalwart refuses
 `x:Role/set` for any permission the caller does not hold, with
 `You are not authorized to grant permissions`. So the playbook recreates
@@ -201,6 +209,20 @@ Stalwart with `docker-compose.recovery-admin.yml`, which sets
 even if the grant fails. Mail keeps flowing apart from those two
 restarts. Do not delete `.provisioned` to get the recovery admin instead:
 that re-runs the seed and resets every account.
+
+### Refreshing the WebUI
+
+The admin console (`/admin`, `/account`) is not in the image. Stalwart
+downloads it from the WebUI's moving `v2` release, caches it in the data
+store and only re-fetches it on its auto-update interval. A server release
+that needs a newer WebUI (1.2.0 needs 2.1.1) can therefore come up serving
+the old one. Force the refresh after the upgrade:
+
+```bash
+cd /data/mailstack
+sudo docker run --rm --env-file .cli.env ghcr.io/stalwartlabs/cli:2.0.0 \
+  create Action/UpdateApps --json {}
+```
 
 ### Rolling back
 

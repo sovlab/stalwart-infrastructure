@@ -92,7 +92,7 @@ services:
   bulwark:
     # Pinned to an exact release, like Stalwart. Bulwark ships often and
     # tracks Stalwart closely, so move the two together.
-    image: ghcr.io/bulwarkmail/webmail:1.21.2
+    image: ghcr.io/bulwarkmail/webmail:1.22.0
     restart: unless-stopped
     logging:
 {% if ovh_ldp_enabled | default(false) | bool %}

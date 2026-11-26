@@ -1,7 +1,7 @@
 ---
 # Same client version as the rest of the SovLab mesh (mail-shared-platform,
 # roles/netbird_client). Held in apt: upgrade deliberately, by bumping this.
-netbird_version: "0.82.0"
+netbird_version: "0.83.2"
 
 # Always explicit, so the client never falls back to NetBird Cloud.
 # netbird.pragma.foo stays routed until every peer has moved (early 2027 at

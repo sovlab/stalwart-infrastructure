@@ -173,7 +173,7 @@ mailstack_subnet_v6: fd00:dead:beef:1::/64
 # from the server and versions independently of it. The playbook pulls this
 # tag on every run. A CLI older than the server can fail to parse its
 # schema (1.0.12 against Stalwart 1.0.2), so bump it when the server moves.
-stalwart_cli_image: ghcr.io/stalwartlabs/cli:1.0.14
+stalwart_cli_image: ghcr.io/stalwartlabs/cli:2.0.0
 
 # Temporary credential used only while provisioning a fresh server, before
 # any account exists. Stalwart treats it as a backdoor that bypasses the

@@ -56,3 +56,24 @@ stalwart_admin_role_permissions:
   - sysPasskeyUpdate
   - sysPasskeyDestroy
   - sysPasskeyQuery
+  # 1.2.0: Mail rules, blocked and safe senders, calendar settings and
+  # Exchange. A new install also gives all but the Exchange ones to the User
+  # role, which this list does not cover; see "New permissions after an
+  # upgrade". There is no sysBlockedSenderUpdate or sysSafeSenderUpdate.
+  - sysMailRuleGet
+  - sysMailRuleCreate
+  - sysMailRuleUpdate
+  - sysMailRuleDestroy
+  - sysMailRuleQuery
+  - sysBlockedSenderGet
+  - sysBlockedSenderCreate
+  - sysBlockedSenderDestroy
+  - sysBlockedSenderQuery
+  - sysSafeSenderGet
+  - sysSafeSenderCreate
+  - sysSafeSenderDestroy
+  - sysSafeSenderQuery
+  - sysCalendarSettingsGet
+  - sysCalendarSettingsUpdate
+  - sysExchangeGet
+  - sysExchangeUpdate
